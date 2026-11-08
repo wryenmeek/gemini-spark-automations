@@ -23,8 +23,8 @@ deploy_bound_project() {
 
   echo ""
   echo "------------------------------------------------------------"
-  echo "Deploying: $title"
-  echo "Directory: $dir"
+  echo "Deploying Bound Project: $title"
+  echo "Directory: projects/$dir"
   echo "Parent Sheet ID: $parent_id"
   echo "------------------------------------------------------------"
   cd "$ROOT_DIR/projects/$dir"
@@ -45,6 +45,30 @@ deploy_bound_project() {
   echo "[SUCCESS] Pushed $title to Apps Script!"
 }
 
+deploy_standalone_library() {
+  local dir="$1"
+  local title="$2"
+
+  echo ""
+  echo "------------------------------------------------------------"
+  echo "Deploying Standalone Library: $title"
+  echo "Directory: $dir"
+  echo "------------------------------------------------------------"
+  cd "$ROOT_DIR/$dir"
+
+  if [ -f ".clasp.json" ] && grep -v '"scriptId": ""' .clasp.json | grep -q 'scriptId'; then
+    "$CLASP" push --force
+    echo "[SUCCESS] Pushed $title library to Apps Script!"
+  else
+    echo "[INFO] $title does not have a configured scriptId yet."
+    echo "  To create or link: run 'clasp create --title \"$title\" --type standalone --rootDir src' in $dir/"
+  fi
+}
+
+# 1. Deploy Core Library
+deploy_standalone_library "core" "SparkCore"
+
+# 2. Deploy Bound Pipelines
 deploy_bound_project \
   "receipts-ingestion" \
   "Financial-Receipts-Ingestion" \
@@ -63,7 +87,7 @@ deploy_bound_project \
 echo ""
 echo "------------------------------------------------------------"
 echo "Deploying: MCDM Archive Knowledge Graph Ingestion"
-echo "Directory: knowledge-graph-ingestion"
+echo "Directory: projects/knowledge-graph-ingestion"
 echo "------------------------------------------------------------"
 cd "$ROOT_DIR/projects/knowledge-graph-ingestion"
 "$CLASP" push --force
@@ -71,5 +95,5 @@ echo "[SUCCESS] Pushed MCDM Archive Knowledge Graph Ingestion to Apps Script!"
 
 echo ""
 echo "============================================================"
-echo " All 4 Google Apps Script Projects Deployed Successfully!"
+echo " All Gemini Spark Deployments Processed Successfully!"
 echo "============================================================"

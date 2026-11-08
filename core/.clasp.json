@@ -1,0 +1,23 @@
+{
+  "scriptId": "",
+  "rootDir": "src",
+  "scriptExtensions": [
+    ".js",
+    ".gs"
+  ],
+  "htmlExtensions": [
+    ".html"
+  ],
+  "jsonExtensions": [
+    ".json"
+  ],
+  "filePushOrder": [
+    "GeminiFleet.js",
+    "DriveMetadata.js",
+    "DriveUtils.js",
+    "SheetKit.js",
+    "Harness.js",
+    "SparkCore.js"
+  ],
+  "skipSubdirectories": false
+}
