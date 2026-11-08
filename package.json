@@ -1,0 +1,18 @@
+{
+  "name": "gemini-spark-automations",
+  "version": "1.0.0",
+  "description": "Google Workspace background automations, shared Apps Script library (SparkCore), and Gemini Spark toolchain bridge",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "deploy": "./deploy.sh"
+  },
+  "devDependencies": {
+    "@google/clasp": "^3.4.1",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
+}

@@ -1,0 +1,1001 @@
+# Google Apps Script: Semantic Knowledge Graph Ingestion Pipeline (`Code.gs`)
+
+**System Location:** Google Drive / `gemini-spark` & [`MCDM_Archive_Knowledge_Graph`](https://drive.google.com/drive/folders/1YECmZ3sMeAttBS2OTR_8WJaa_Bt5mO4b)  
+**Filename:** `Knowledge_Graph_Automation_Code.gs.md`  
+**Live Apps Script Project:** [MCDM Archive Knowledge Graph Ingestion](https://script.google.com/d/1WLRQ7rZnz-LmtKmssiCyjrm8vL2ikG-KdPjTfiSI28TuB6F2XdP21kFZ/edit) (`1WLRQ7rZnz-LmtKmssiCyjrm8vL2ikG-KdPjTfiSI28TuB6F2XdP21kFZ`)  
+**Target Seeds Folder:** [`assets/seeds/`](https://drive.google.com/drive/folders/1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT) (`1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT`)  
+**Effective Date:** November 1, 2026  
+**Runtime:** Google Apps Script (V8 Engine) + Recursive BFS Tree Crawl + 18-Model Dynamic Fleet Discovery + ArcadeDB Multi-Model Engine  
+
+---
+
+## 1. Overview & System Architecture
+
+This script implements the serverless background ingestion tier of the **Semantic Knowledge Graph System**. It autonomously monitors designated Google Drive folders, recursively traverses child subfolders via breadth-first search (BFS), detects new or modified RPG campaign documents, world lore, and PDFs, extracts semantic entities and multi-hop relationships via Gemini with structured JSON schemas (`responseSchema`), and writes idempotent version-controlled OpenCypher seed files directly into `assets/seeds/`.
+
+### Core Architectural Safeguards
+1. **Dynamic Full-Fleet Model Discovery (18+ Quota Buckets):**
+   - **Endpoint Discovery:** Queries `GET https://generativelanguage.googleapis.com/v1beta/models` via `discoverAvailableModels(apiKey)`, dynamically discovering all general multimodal models across 2.5, 3.x, 3.5, 3.8, and 4-argon families. Specialized endpoints (TTS, image generation, Lyria, robotics) are automatically filtered out.
+   - **Prioritized Flash-First Ladder:** Sorts high-throughput, low-latency Flash tiers first (`2.5-flash`, `2.5-flash-lite`, `flash-latest`, `3.5-flash`, `3.1-flash-lite`, etc.), followed by Pro reasoning tiers (`2.5-pro`, `pro-latest`, `3.1-pro`, `gemini-4-argon`).
+   - **Daily Limit Error Detection & Cross-Execution Ban:** When a model hits HTTP 429 daily exhaustion (`GenerateContent requests per day` / RPD), it is banned in `CacheService` and `ScriptProperties` until UTC midnight (when Google AI Studio quotas reset).
+   - **Zero-Waste Active Ladder:** The active ladder automatically filters out daily-exhausted models upfront, cascading seamlessly across 18+ independent quota buckets.
+   - **Model Provenance Tracking:** Both the OpenCypher seed header (`// Model: <name>`) and the Drive file description (`"model_used": "<name>"`) record the exact model that processed the document.
+2. **Recursive BFS Folder Traversal:** Employs a defensive breadth-first queue with visited folder ID tracking to crawl subfolders (e.g. `Arcadia/`, `Flee Mortals/`, `Illrigger/`, `Kingdoms and Warfare/`) while strictly enforcing batch limits (`BATCH_SIZE = 5`) and runtime budgets (`MAX_RUNTIME_MS = 240,000`).
+3. **Idempotent OpenCypher Generation (`MERGE` vs `CREATE`):** Vertices and relationships are formatted exclusively using OpenCypher `MERGE` and `MATCH ... MERGE` statements, preventing ArcadeDB unique index collisions.
+4. **Zero-Token Pre-Flight Screening:** Utilizes Google Drive's native file description metadata to persist a compact Schema v1 JSONL tag (`{"schema_v": 1, "kg_ingested": true, ...}`). Already-processed files are skipped before invoking any external APIs.
+5. **Execution Time-Budget & Batching Guard:** Implements a strict `BATCH_SIZE = 5` and a 4-minute execution safety budget (`MAX_RUNTIME_MS = 240,000`), exiting cleanly before Google's 6-minute cutoff.
+6. **Oversized PDF Heap Protection (`MAX_PDF_BYTES`):** Skips and flags PDFs larger than 15 MB to prevent out-of-memory crashes on 100 MB rulebooks.
+7. **Credential Isolation:** API keys and folder IDs are fetched exclusively via `PropertiesService.getScriptProperties()`.
+
+---
+
+## 2. Complete Production Source Code (`Code.gs`)
+
+```javascript
+/**
+ * ==============================================================================
+ * Production Semantic Knowledge Graph Ingestion Pipeline
+ * ==============================================================================
+ * Autonomous Google Apps Script pipeline monitoring Drive for documents and PDFs,
+ * performing zero-token pre-flight filtering, extracting entities/relations via
+ * Gemini 2.5 Flash with structured responseSchema, and persisting idempotent
+ * OpenCypher seed files (using MERGE semantics) directly into version control.
+ *
+ * Implements:
+ *   1. Zero-Token Pre-Flight Screening (Direct-to-Storage schema_v metadata in Drive).
+ *   2. Idempotent OpenCypher statements (MERGE instead of CREATE) to prevent ArcadeDB
+ *      unique index collisions.
+ *   3. Multimodal PDF & Document extraction handling.
+ *   4. PropertiesService secret isolation (No hardcoded credentials).
+ *
+ * Governing Standard: gemini-spark/Automation_Architecture_Learnings_and_Best_Practices.md
+ */
+
+// Default configuration constants (overridable via Script Properties)
+const KG_DEFAULTS = {
+  MODEL_NAME: "gemini-2.5-flash",
+  MODEL_LADDER: [
+    "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
+    "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
+    "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
+    "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
+    "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
+    "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
+    "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
+    "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
+    "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
+    "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
+    "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
+    "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
+    "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
+    "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
+    "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
+    "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
+    "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
+    "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
+  ],
+  DEFAULT_SOURCE_FOLDER_ID: "1AYeQE47BeJdxwAAa3x5_Z2_hTmyq9NVz", // MCDM Archive
+  DEFAULT_SEEDS_FOLDER_ID: "1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT",   // assets/seeds in MCDM_Archive_Knowledge_Graph
+  BATCH_SIZE: 5,                                                   // Maximum files processed per trigger run
+  MAX_RUNTIME_MS: 4 * 60 * 1000,                                   // 4-minute runtime safety budget (avoids 6-min hard timeout)
+  MAX_PDF_BYTES: 15 * 1024 * 1024                                  // 15 MB maximum inline PDF payload limit
+};
+
+/**
+ * Retrieves configuration values securely from ScriptProperties with safe defaults.
+ */
+function getKGConfig() {
+  const props = PropertiesService.getScriptProperties();
+  const customLadder = props.getProperty("GEMINI_MODEL_LADDER");
+  const ladderList = customLadder
+    ? customLadder.split(",").map(m => m.trim()).filter(Boolean)
+    : KG_DEFAULTS.MODEL_LADDER;
+
+  return {
+    apiKey: props.getProperty("GEMINI_API_KEY") || "",
+    sourceFolderId: props.getProperty("SOURCE_FOLDER_ID") || KG_DEFAULTS.DEFAULT_SOURCE_FOLDER_ID,
+    seedsFolderId: props.getProperty("SEEDS_FOLDER_ID") || KG_DEFAULTS.DEFAULT_SEEDS_FOLDER_ID,
+    modelName: props.getProperty("GEMINI_MODEL") || KG_DEFAULTS.MODEL_NAME,
+    modelLadder: ladderList
+  };
+}
+
+/**
+ * Real-time Model Discovery Diagnostic:
+ * Queries the Gemini API models.list endpoint, logs all available models to the console,
+ * and saves the catalog to Drive.
+ */
+function discoverModelsAndSaveToSeeds(config) {
+  config = config || getKGConfig();
+  if (!config.apiKey) {
+    Logger.log("[ERROR] GEMINI_API_KEY is not configured in Script Properties.");
+    return null;
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${config.apiKey}&pageSize=100`;
+  Logger.log(`[DISCOVERY] Querying Gemini models endpoint: ${url.replace(config.apiKey, "HIDDEN_KEY")}`);
+
+  let response;
+  try {
+    response = UrlFetchApp.fetch(url, { method: "get", muteHttpExceptions: true });
+  } catch (netErr) {
+    Logger.log(`[ERROR] Network error querying models: ${netErr.toString()}`);
+    return null;
+  }
+
+  const code = response.getResponseCode();
+  const rawText = response.getContentText();
+  Logger.log(`[DISCOVERY] Endpoint response code: HTTP ${code}`);
+
+  if (code !== 200) {
+    Logger.log(`[ERROR] Gemini API returned HTTP ${code}: ${rawText}`);
+    return rawText;
+  }
+
+  try {
+    const json = JSON.parse(rawText);
+    const models = json.models || [];
+    Logger.log(`=== [DISCOVERED MODELS: ${models.length} TOTAL] ===`);
+
+    const generateModels = models
+      .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+      .map(m => m.name.replace(/^models\//, ""));
+
+    Logger.log(`Models supporting generateContent (${generateModels.length}):\n${generateModels.join("\n")}`);
+
+    const seedsFolder = DriveApp.getFolderById(config.seedsFolderId);
+    const fileName = "00_discovered_gemini_models.json";
+    const existing = seedsFolder.getFilesByName(fileName);
+    if (existing.hasNext()) {
+      existing.next().setContent(rawText);
+    } else {
+      seedsFolder.createFile(fileName, rawText);
+    }
+    Logger.log(`[SUCCESS] Saved full JSON catalog to assets/seeds/${fileName}`);
+  } catch (err) {
+    Logger.log(`[WARN] Error parsing or saving models: ${err.toString()}`);
+  }
+
+  return rawText;
+}
+
+/**
+ * Web App Endpoint: Exposes live model discovery output directly over HTTP.
+ */
+function doGet(e) {
+  const config = getKGConfig();
+  if (!config.apiKey) {
+    return ContentService.createTextOutput(JSON.stringify({ error: "Missing GEMINI_API_KEY" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  const rawText = discoverModelsAndSaveToSeeds(config);
+  return ContentService.createTextOutput(rawText)
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Main Trigger Function: Run on a 10-minute time-driven trigger or manual invocation.
+ */
+function runIngestionPipeline() {
+  Logger.log(">>> [Knowledge Graph] Starting Autonomous Ingestion Run...");
+  const config = getKGConfig();
+
+  if (!config.apiKey) {
+    Logger.log("[ERROR] GEMINI_API_KEY is not configured in Script Properties. Exiting.");
+    return { status: "ERROR", message: "Missing GEMINI_API_KEY" };
+  }
+
+  // Live model discovery audit & catalog persist
+  try {
+    discoverModelsAndSaveToSeeds(config);
+  } catch (_e) {}
+
+  if (!config.sourceFolderId) {
+    Logger.log("[WARN] SOURCE_FOLDER_ID not set. Please set SOURCE_FOLDER_ID in Script Properties.");
+    return { status: "WARN", message: "Missing SOURCE_FOLDER_ID" };
+  }
+
+  let sourceFolder;
+  let seedsFolder;
+  try {
+    sourceFolder = DriveApp.getFolderById(config.sourceFolderId);
+    seedsFolder = DriveApp.getFolderById(config.seedsFolderId);
+  } catch (e) {
+    Logger.log(`[ERROR] Unable to access source or seeds folder: ${e.toString()}`);
+    return { status: "ERROR", message: e.toString() };
+  }
+
+  const startTime = Date.now();
+  let processedCount = 0;
+  let skippedCount = 0;
+  const folderQueue = [sourceFolder];
+  const visitedFolderIds = new Set();
+
+  while (folderQueue.length > 0 && processedCount < KG_DEFAULTS.BATCH_SIZE) {
+    // Time-budget safety guard: exit cleanly before hitting Apps Script 6-minute hard timeout
+    if (Date.now() - startTime > KG_DEFAULTS.MAX_RUNTIME_MS) {
+      Logger.log(`[TIME BUDGET] Reached 4-minute execution threshold. Exiting cleanly to avoid timeout. Processed: ${processedCount}, Skipped: ${skippedCount}. Remaining files will be processed in the next scheduled execution.`);
+      break;
+    }
+
+    const currentFolder = folderQueue.shift();
+    const folderId = currentFolder.getId();
+    if (visitedFolderIds.has(folderId)) {
+      continue;
+    }
+    visitedFolderIds.add(folderId);
+
+    const folderName = currentFolder.getName ? currentFolder.getName() : folderId;
+    Logger.log(`[CRAWL] Scanning folder: "${folderName}" (${folderId})`);
+
+    // 1. Process files in currentFolder
+    const files = currentFolder.getFiles();
+    while (files.hasNext() && processedCount < KG_DEFAULTS.BATCH_SIZE) {
+      if (Date.now() - startTime > KG_DEFAULTS.MAX_RUNTIME_MS) {
+        Logger.log(`[TIME BUDGET] Reached 4-minute execution threshold while processing files. Exiting cleanly.`);
+        break;
+      }
+
+      try {
+        const file = files.next();
+        const fileId = file.getId();
+        const fileName = file.getName();
+        const mimeType = file.getMimeType();
+
+        // 1. Zero-Token Pre-Flight Screening (Filter already ingested or oversized files)
+        if (isAlreadyIngested(file)) {
+          Logger.log(`[SKIP] Already processed (schema_v marker present): ${fileName} (${fileId})`);
+          skippedCount++;
+          continue;
+        }
+
+        // 2. Validate supported mime types
+        const isDoc = (mimeType === MimeType.GOOGLE_DOCS || mimeType === "application/vnd.google-apps.document");
+        const isText = (mimeType === MimeType.PLAIN_TEXT || fileName.endsWith(".md") || fileName.endsWith(".txt"));
+        const isPdf = (mimeType === "application/pdf" || fileName.endsWith(".pdf"));
+
+        if (!isDoc && !isText && !isPdf) {
+          Logger.log(`[SKIP] Unsupported file type '${mimeType}': ${fileName}`);
+          continue;
+        }
+
+        Logger.log(`[PROCESS] Ingesting file: ${fileName} (${mimeType}) in "${folderName}"`);
+
+        // 3. Extract content or prepare multimodal payload
+        const payload = buildGeminiPayload(file, mimeType, isDoc, isText, isPdf);
+        if (!payload) {
+          Logger.log(`[WARN] File content empty, oversized, or unextractable for ${fileName}`);
+          continue;
+        }
+
+        // 4. Call Gemini API with structured schema and dynamic model discovery / quota failover
+        const graphData = callGeminiAPI(payload, config.apiKey, config.modelLadder);
+        if (!graphData || (!graphData.entities && !graphData.relationships)) {
+          Logger.log(`[WARN] No entities extracted from ${fileName}`);
+          continue;
+        }
+
+        // 5. Generate idempotent OpenCypher statements with MERGE
+        const cypherContent = generateCypherSeed(fileName, graphData);
+        if (!cypherContent) {
+          Logger.log(`[WARN] No valid Cypher statements generated for ${fileName}`);
+          continue;
+        }
+
+        // 6. Save seed file in seeds/ folder in Drive
+        const timestamp = Utilities.formatDate(new Date(), "UTC", "yyyyMMdd_HHmmss");
+        const seedFileName = `03_ingested_${timestamp}.cypher`;
+        seedsFolder.createFile(seedFileName, cypherContent, MimeType.PLAIN_TEXT);
+        Logger.log(`[SUCCESS] Created OpenCypher seed file: ${seedFileName}`);
+
+        // 7. Mark file as ingested in Drive description (Schema v1 JSONL)
+        const entityCount = (graphData.entities || []).length;
+        const relCount = (graphData.relationships || []).length;
+        markFileAsIngested(file, entityCount, relCount, seedFileName, graphData._modelUsed);
+        processedCount++;
+      } catch (fileErr) {
+        Logger.log(`[ERROR] Recoverable error processing file: ${fileErr.toString()}`);
+      }
+    }
+
+    // 2. Discover and enqueue child subfolders
+    if (processedCount < KG_DEFAULTS.BATCH_SIZE && (Date.now() - startTime < KG_DEFAULTS.MAX_RUNTIME_MS)) {
+      try {
+        if (currentFolder.getFolders) {
+          const subFolders = currentFolder.getFolders();
+          while (subFolders.hasNext()) {
+            folderQueue.push(subFolders.next());
+          }
+        }
+      } catch (subErr) {
+        Logger.log(`[WARN] Could not retrieve subfolders for "${folderName}": ${subErr.toString()}`);
+      }
+    }
+  }
+
+  Logger.log(`>>> [Knowledge Graph] Ingestion run completed. Processed: ${processedCount}, Skipped: ${skippedCount}`);
+  return { status: "SUCCESS", processed: processedCount, skipped: skippedCount };
+}
+
+/**
+ * Checks whether a file has already been ingested by inspecting its Drive description.
+ * Implements the Zero-Token metadata screening pattern.
+ */
+function isAlreadyIngested(file) {
+  try {
+    const desc = file.getDescription() || "";
+    if (!desc) return false;
+    if (desc.includes('"schema_v"')) {
+      const parsed = JSON.parse(desc);
+      return parsed.kg_ingested === true || parsed.status === "EXCEEDS_INLINE_PDF_LIMIT";
+    }
+  } catch (_e) {
+    // If not JSON, treat as not ingested
+  }
+  return false;
+}
+
+/**
+ * Updates the Drive file's description with a canonical schema_v JSONL payload.
+ */
+function markFileAsIngested(file, entityCount, relCount, seedFileName, modelUsed) {
+  const metadata = {
+    schema_v: 1,
+    kg_ingested: true,
+    entities_count: entityCount,
+    relationships_count: relCount,
+    seed_file: seedFileName,
+    model_used: modelUsed || "gemini-auto",
+    updated_at: new Date().toISOString()
+  };
+  file.setDescription(JSON.stringify(metadata));
+}
+
+/**
+ * Sanitizes an entity name into a clean variable identifier for Cypher.
+ */
+function sanitizeCypherVar(name) {
+  if (!name) return "entity";
+  const cleaned = name.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase();
+  return cleaned || "entity";
+}
+
+/**
+ * Sanitizes a string for inclusion in Cypher single-quoted literals.
+ */
+function sanitizeCypherString(text) {
+  if (!text) return "";
+  return String(text)
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+}
+
+/**
+ * Generates version-controlled OpenCypher DML using idempotent MERGE semantics.
+ * Resolves the unique index crash where CREATE causes duplicate key collisions in ArcadeDB.
+ */
+function generateCypherSeed(fileName, graphData) {
+  const modelInfo = (graphData && graphData._modelUsed) ? graphData._modelUsed : "Gemini Multimodal Fleet";
+  const lines = [
+    `// ==============================================================================`,
+    `// Auto-generated OpenCypher Migration Script: ${fileName}`,
+    `// Engine: Gemini Spark Semantic Ingestion Pipeline`,
+    `// Model: ${modelInfo}`,
+    `// Generation Timestamp: ${new Date().toISOString()}`,
+    `// ==============================================================================`
+  ];
+
+  const entities = graphData.entities || [];
+  const relationships = graphData.relationships || [];
+
+  if (entities.length === 0 && relationships.length === 0) {
+    return "";
+  }
+
+  const entityTypeMap = {};
+
+  // 1. Generate Idempotent Entity MERGE statements
+  lines.push("\n// 1. Vertices (MERGE prevents UNIQUE constraint collision on name)");
+  entities.forEach((entity) => {
+    const rawName = (entity.name || "").trim();
+    if (!rawName) return;
+
+    let eType = (entity.type || "Entity").trim();
+    // Normalize type to PascalCase
+    eType = eType.charAt(0).toUpperCase() + eType.slice(1).replace(/[^a-zA-Z0-9_]/g, "");
+    if (!eType) eType = "Entity";
+
+    const varName = sanitizeCypherVar(rawName);
+    const sanitizedName = sanitizeCypherString(rawName);
+    entityTypeMap[rawName.toLowerCase()] = eType;
+
+    const propItems = [`name: '${sanitizedName}'`];
+    if (entity.description) {
+      propItems.push(`description: '${sanitizeCypherString(entity.description)}'`);
+    }
+
+    lines.push(`MERGE (${varName}:${eType} {${propItems.join(", ")}})`);
+  });
+
+  // 2. Generate Relationship MATCH ... MERGE statements
+  if (relationships.length > 0) {
+    lines.push("\n// 2. Relationships (Idempotent Edge MERGE)");
+    relationships.forEach((rel) => {
+      const sourceName = (rel.source || "").trim();
+      const targetName = (rel.target || "").trim();
+      let relType = (rel.type || "RELATED_TO").toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+
+      if (!sourceName || !targetName) return;
+
+      const srcType = entityTypeMap[sourceName.toLowerCase()] || "";
+      const tgtType = entityTypeMap[targetName.toLowerCase()] || "";
+
+      const srcMatch = srcType ? `(src:${srcType} {name: '${sanitizeCypherString(sourceName)}'})` : `(src {name: '${sanitizeCypherString(sourceName)}'})`;
+      const tgtMatch = tgtType ? `(tgt:${tgtType} {name: '${sanitizeCypherString(targetName)}'})` : `(tgt {name: '${sanitizeCypherString(targetName)}'})`;
+
+      lines.push(
+        `MATCH ${srcMatch}, ${tgtMatch}\n` +
+        `MERGE (src)-[:${relType}]->(tgt);`
+      );
+    });
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Constructs the Gemini API JSON payload, handling Docs, Text, and multimodal PDFs.
+ */
+function buildGeminiPayload(file, mimeType, isDoc, isText, isPdf) {
+  let textContent = "";
+
+  if (isDoc) {
+    const doc = DocumentApp.openById(file.getId());
+    textContent = doc.getBody().getText();
+  } else if (isText) {
+    textContent = file.getBlob().getDataAsString();
+  }
+
+  const systemInstruction = 
+    "You are an expert Knowledge Graph Ontologist for fantasy RPG campaign archives, technical documentation, and lore. " +
+    "Extract all named entities (Character, Location, Faction, Session, Item, Event) and relationships " +
+    "(LOCATED_IN, ALLIED_WITH, HOSTILE_TO, FEATURED_IN, MEMBER_OF, PARTICIPATED_IN). " +
+    "Return strict JSON matching the schema.";
+
+  const schema = {
+    type: "OBJECT",
+    properties: {
+      entities: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            name: { type: "STRING" },
+            type: { type: "STRING" },
+            description: { type: "STRING" }
+          },
+          required: ["name", "type"]
+        }
+      },
+      relationships: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            source: { type: "STRING" },
+            target: { type: "STRING" },
+            type: { type: "STRING" }
+          },
+          required: ["source", "target", "type"]
+        }
+      }
+    },
+    required: ["entities", "relationships"]
+  };
+
+  const parts = [];
+
+  if (isPdf) {
+    const fileSize = file.getSize ? file.getSize() : 0;
+    if (fileSize > KG_DEFAULTS.MAX_PDF_BYTES) {
+      Logger.log(`[SKIP_OVERSIZED_PDF] File "${file.getName()}" (${(fileSize / (1024 * 1024)).toFixed(1)} MB) exceeds maximum inline PDF limit of ${(KG_DEFAULTS.MAX_PDF_BYTES / (1024 * 1024))} MB. Skipping inline LLM extraction to prevent out-of-memory crashes.`);
+      const metadata = {
+        schema_v: 1,
+        kg_ingested: false,
+        status: "EXCEEDS_INLINE_PDF_LIMIT",
+        file_size_mb: Number((fileSize / (1024 * 1024)).toFixed(1)),
+        note: "Process locally via Gemini Spark Python compute",
+        updated_at: new Date().toISOString()
+      };
+      if (file.setDescription) {
+        file.setDescription(JSON.stringify(metadata));
+      }
+      return null;
+    }
+
+    // Binary PDF: Base64 encode and stream via multimodal inlineData
+    const blob = file.getBlob();
+    const base64Bytes = Utilities.base64Encode(blob.getBytes());
+    parts.push({
+      inlineData: {
+        mimeType: "application/pdf",
+        data: base64Bytes
+      }
+    });
+    parts.push({
+      text: "Analyze this PDF document and extract the complete semantic knowledge graph of entities and relationships."
+    });
+  } else {
+    if (!textContent || textContent.trim().length < 50) {
+      return null;
+    }
+    // Truncate to safe token window if necessary (first 100k chars ~ 25k tokens)
+    const truncatedText = textContent.length > 100000 ? textContent.substring(0, 100000) : textContent;
+    parts.push({ text: truncatedText });
+  }
+
+  return {
+    contents: [{ parts: parts }],
+    systemInstruction: { parts: [{ text: systemInstruction }] },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: schema,
+      temperature: 0.1
+    }
+  };
+}
+
+/**
+ * Checks whether an HTTP 429 response is due to exceeding the daily quota (RPD)
+ * vs a transient per-minute rate limit (RPM).
+ */
+function isDailyQuotaError(statusCode, responseText) {
+  if (statusCode !== 429) return false;
+  if (!responseText) return false;
+  const text = responseText.toLowerCase();
+  return (
+    text.includes("per day") ||
+    text.includes("perday") ||
+    text.includes("requests per day") ||
+    text.includes("daily") ||
+    text.includes("free tier per day") ||
+    text.includes("quota exceeded for quota metric 'generatecontent requests' and limit 'generatecontent requests per day")
+  );
+}
+
+/**
+ * Calculates remaining seconds until the next UTC midnight (when Google AI Studio daily quotas reset).
+ */
+function getSecondsUntilUtcMidnight() {
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
+  return Math.max(60, Math.floor((tomorrow.getTime() - now.getTime()) / 1000));
+}
+
+/**
+ * Marks a model as daily-exhausted across CacheService (fast memory) and ScriptProperties (durable).
+ */
+function markModelDailyExhausted(model) {
+  const secondsLeft = getSecondsUntilUtcMidnight();
+  const resetTimestamp = Date.now() + secondsLeft * 1000;
+
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache) {
+      cache.put(`DAILY_EXHAUSTED_${model}`, "true", Math.min(21600, secondsLeft));
+    }
+  } catch (e) {
+    Logger.log(`[WARN] Could not update CacheService: ${e.toString()}`);
+  }
+
+  try {
+    const props = PropertiesService.getScriptProperties();
+    if (props) {
+      props.setProperty(`DAILY_EXHAUSTED_${model}`, String(resetTimestamp));
+    }
+  } catch (e) {
+    Logger.log(`[WARN] Could not update ScriptProperties: ${e.toString()}`);
+  }
+
+  const hoursLeft = (secondsLeft / 3600).toFixed(1);
+  Logger.log(`[DAILY_LIMIT_EXCEEDED] Model "${model}" hit daily quota limit. Banned until UTC midnight (~${hoursLeft}h remaining).`);
+}
+
+/**
+ * Checks if a model is currently flagged as having exceeded its daily quota limit.
+ */
+function isModelDailyExhausted(model) {
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache && cache.get(`DAILY_EXHAUSTED_${model}`) === "true") {
+      return true;
+    }
+
+    const props = PropertiesService.getScriptProperties();
+    if (props) {
+      const resetTimeStr = props.getProperty(`DAILY_EXHAUSTED_${model}`);
+      if (resetTimeStr) {
+        const resetTime = parseInt(resetTimeStr, 10);
+        if (Date.now() < resetTime) {
+          return true;
+        } else {
+          props.deleteProperty(`DAILY_EXHAUSTED_${model}`);
+          return false;
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log(`[WARN] Error checking model exhaustion status for "${model}": ${e.toString()}`);
+  }
+  return false;
+}
+
+/**
+ * Dynamically queries the Gemini API to discover all available models supporting generateContent,
+ * filtering and prioritizing fast multimodal models (Flash tier -> Lite -> Pro).
+ * Results are cached in ScriptCache for up to 6 hours.
+ */
+function discoverAvailableModels(apiKey) {
+  const cacheKey = "DISCOVERED_GEMINI_MODELS";
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache) {
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    }
+  } catch (e) {
+    Logger.log(`[WARN] CacheService lookup failed: ${e.toString()}`);
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+  try {
+    const response = UrlFetchApp.fetch(url, { method: "get", muteHttpExceptions: true });
+    if (response.getResponseCode() === 200) {
+      const json = JSON.parse(response.getContentText());
+      const rawModels = json.models || [];
+
+      // Priority scoring dictionary
+      const priorityMap = {
+        "gemini-2.5-flash": 10,
+        "gemini-2.5-flash-lite": 15,
+        "gemini-flash-latest": 20,
+        "gemini-flash-lite-latest": 25,
+        "gemini-3.5-flash": 30,
+        "gemini-3.5-flash-lite": 35,
+        "gemini-3.1-flash-lite": 40,
+        "gemini-3.1-flash-lite-preview": 45,
+        "gemini-3-flash-preview": 50,
+        "gemini-3.6-flash": 55,
+        "gemini-3.7-flash": 60,
+        "gemini-3.8-flash": 65,
+        "gemini-omni-flash-preview": 70,
+        "gemini-omni-1.1-flash": 75,
+        "gemini-2.5-pro": 100,
+        "gemini-pro-latest": 105,
+        "gemini-3.1-pro-preview": 110,
+        "gemini-3.1-pro-preview-customtools": 115,
+        "gemini-4-argon": 120
+      };
+
+      const excludedKeywords = [
+        "tts", "image", "lyria", "transcribe", "robotics",
+        "computer-use", "deep-research", "banana", "embed", "aqa"
+      ];
+
+      const discovered = rawModels
+        .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+        .map(m => m.name.replace(/^models\//, ""))
+        .filter(name => {
+          const lower = name.toLowerCase();
+          return !excludedKeywords.some(keyword => lower.includes(keyword));
+        })
+        .sort((a, b) => {
+          const rankA = priorityMap[a] || 200;
+          const rankB = priorityMap[b] || 200;
+          return rankA - rankB;
+        });
+
+      if (discovered.length > 0) {
+        try {
+          const cache = CacheService.getScriptCache();
+          if (cache) {
+            cache.put(cacheKey, JSON.stringify(discovered), 21600); // 6 hours
+          }
+        } catch (e) {}
+        Logger.log(`[MODEL_DISCOVERY] Discovered ${discovered.length} available Gemini models: [${discovered.join(", ")}]`);
+        return discovered;
+      }
+    }
+  } catch (e) {
+    Logger.log(`[WARN] Dynamic model discovery failed (${e.toString()}). Falling back to static ladder.`);
+  }
+
+  return KG_DEFAULTS.MODEL_LADDER;
+}
+
+/**
+ * Assembles the active dynamic model ladder:
+ * 1. Discovers candidate models from API (or uses explicit custom ladder if configured).
+ * 2. Filters out any models that have hit their daily limit.
+ */
+function getDynamicModelLadder(apiKey, configLadder) {
+  let candidates = [];
+  if (Array.isArray(configLadder) && configLadder.length > 0 && configLadder !== KG_DEFAULTS.MODEL_LADDER) {
+    candidates = configLadder;
+  } else {
+    candidates = discoverAvailableModels(apiKey);
+  }
+
+  const activeLadder = candidates.filter(m => !isModelDailyExhausted(m));
+
+  if (activeLadder.length > 0) {
+    return activeLadder;
+  }
+
+  Logger.log(`[WARN] All models in candidate list have hit daily quota limits! Attempting primary model as last resort.`);
+  return candidates.slice(0, 1);
+}
+
+/**
+ * Invokes the Gemini API via UrlFetchApp with Dynamic Model Discovery, Daily Limit Tracking,
+ * and Exponential Backoff.
+ * - When a model hits its DAILY limit, it is recorded and banned until UTC midnight; execution immediately falls back to the next unexhausted model.
+ * - When a model hits a TRANSIENT rate limit (RPM), it retries once with jitter before cascading.
+ */
+function callGeminiAPI(payload, apiKey, modelOrLadder) {
+  const ladder = getDynamicModelLadder(apiKey, modelOrLadder);
+  Logger.log(`[MODEL_LADDER_ACTIVE] Running with active ladder (${ladder.length} models): [${ladder.join(" -> ")}]`);
+
+  for (let i = 0; i < ladder.length; i++) {
+    const model = ladder[i];
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const options = {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+
+    try {
+      let response = UrlFetchApp.fetch(url, options);
+      let code = response.getResponseCode();
+      let responseText = response.getContentText();
+
+      // Check for Daily Limit Quota Exhaustion (RPD)
+      if (isDailyQuotaError(code, responseText)) {
+        markModelDailyExhausted(model);
+        const nextModel = ladder[i + 1];
+        if (nextModel) {
+          Logger.log(`[MODEL_LADDER_ROTATE] Daily quota exceeded for "${model}". Falling back immediately to "${nextModel}"...`);
+          continue;
+        } else {
+          Logger.log(`[MODEL_LADDER_EXHAUSTED] All models in dynamic ladder (${ladder.join(" -> ")}) have exhausted their quotas.`);
+          return null;
+        }
+      }
+
+      // Check for Transient Rate Limits (RPM / 503)
+      if (code === 429 || code === 503) {
+        Logger.log(`[QUOTA_TRANSIENT] Model "${model}" temporarily throttled (HTTP ${code}). Pausing 1.5s for recovery...`);
+        Utilities.sleep(1500);
+        response = UrlFetchApp.fetch(url, options);
+        code = response.getResponseCode();
+        responseText = response.getContentText();
+
+        if (isDailyQuotaError(code, responseText)) {
+          markModelDailyExhausted(model);
+        }
+      }
+
+      // Persistent error on current model: Rotate to next candidate
+      if (code === 429 || code === 503) {
+        const nextModel = ladder[i + 1];
+        if (nextModel) {
+          Logger.log(`[MODEL_LADDER_ROTATE] Model "${model}" quota exhausted (HTTP ${code}). Rotating down to "${nextModel}"...`);
+          continue;
+        } else {
+          Logger.log(`[MODEL_LADDER_EXHAUSTED] All models in ladder (${ladder.join(" -> ")}) exhausted.`);
+          return null;
+        }
+      }
+
+      if (code !== 200) {
+        Logger.log(`[ERROR] Model "${model}" returned HTTP ${code}: ${responseText}`);
+        continue;
+      }
+
+      const json = JSON.parse(responseText);
+      const candidateText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!candidateText) {
+        Logger.log(`[WARN] Model "${model}" returned no candidate parts.`);
+        continue;
+      }
+
+      Logger.log(`[SUCCESS] Extracted graph entities using model: "${model}"`);
+      const parsedData = JSON.parse(candidateText);
+      parsedData._modelUsed = model;
+      return parsedData;
+    } catch (e) {
+      Logger.log(`[ERROR] Exception calling model "${model}": ${e.toString()}`);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Diagnostic Validation Function:
+ * Tests the top models in the ladder with a minimal probe to verify real-time connectivity,
+ * quotas, and dynamic failover behavior.
+ */
+function validateDynamicLadder() {
+  Logger.log("=== [DYNAMIC LADDER VALIDATION] ===");
+  const config = getKGConfig();
+  if (!config.apiKey) {
+    Logger.log("[ERROR] Missing GEMINI_API_KEY");
+    return;
+  }
+
+  const ladder = getDynamicModelLadder(config.apiKey);
+  Logger.log(`Discovered & Active Ladder (${ladder.length} models):`);
+  ladder.forEach((m, idx) => Logger.log(`  ${idx + 1}. ${m}`));
+
+  const testPayload = {
+    contents: [{
+      parts: [{ text: "Extract named entities: Matthew Colville founded MCDM in California." }]
+    }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          entities: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: { name: { type: "STRING" }, type: { type: "STRING" } },
+              required: ["name", "type"]
+            }
+          }
+        },
+        required: ["entities"]
+      }
+    }
+  };
+
+  Logger.log("Executing test callGeminiAPI with full dynamic fleet failover...");
+  const result = callGeminiAPI(testPayload, config.apiKey);
+  if (result) {
+    Logger.log(`>>> [PASS] Validation successful! Model used: "${result._modelUsed}"`);
+    Logger.log(`Extracted: ${JSON.stringify(result.entities)}`);
+  } else {
+    Logger.log(">>> [FAIL] All models in ladder failed or exhausted.");
+  }
+  return result;
+}
+
+/**
+ * Diagnostic Dry-Run Test Function:
+ * Inspects source folder, seed folder, API key configuration, dynamically discovers models,
+ * reports daily exhaustion status, and counts pending vs ingested files.
+ */
+function testKGIngestionDryRun() {
+  Logger.log("=== [Knowledge Graph Ingestion Dry-Run] ===");
+  const config = getKGConfig();
+  const hasKey = Boolean(config.apiKey);
+  Logger.log(`API Key configured: ${hasKey} | Configured Model: ${config.modelName}`);
+
+  let discoveredModels = [];
+  let activeLadder = [];
+  if (hasKey) {
+    discoveredModels = discoverAvailableModels(config.apiKey);
+    activeLadder = getDynamicModelLadder(config.apiKey, config.modelLadder);
+    Logger.log(`Discovered Models: [${discoveredModels.join(", ")}]`);
+    Logger.log(`Active (Unexhausted) Ladder: [${activeLadder.join(" -> ")}]`);
+  }
+
+  let sourceFolder = null;
+  let totalFolders = 0;
+  let sourceFileCount = 0;
+  let pendingCount = 0;
+  let ingestedCount = 0;
+  let oversizedCount = 0;
+  let unsupportedCount = 0;
+
+  try {
+    sourceFolder = DriveApp.getFolderById(config.sourceFolderId);
+    Logger.log(`[PASS] Source Folder found: "${sourceFolder.getName()}" (${config.sourceFolderId})`);
+
+    const folderQueue = [sourceFolder];
+    const visited = new Set();
+
+    while (folderQueue.length > 0) {
+      const current = folderQueue.shift();
+      const fId = current.getId();
+      if (visited.has(fId)) continue;
+      visited.add(fId);
+      totalFolders++;
+
+      const files = current.getFiles();
+      while (files.hasNext()) {
+        sourceFileCount++;
+        const file = files.next();
+        if (isAlreadyIngested(file)) {
+          ingestedCount++;
+        } else {
+          const mimeType = file.getMimeType ? file.getMimeType() : "";
+          const name = file.getName ? file.getName() : "";
+          const isDoc = (mimeType === MimeType.GOOGLE_DOCS || mimeType === "application/vnd.google-apps.document");
+          const isText = (mimeType === MimeType.PLAIN_TEXT || name.endsWith(".md") || name.endsWith(".txt"));
+          const isPdf = (mimeType === "application/pdf" || name.endsWith(".pdf"));
+
+          if (!isDoc && !isText && !isPdf) {
+            unsupportedCount++;
+          } else if (isPdf && file.getSize && file.getSize() > KG_DEFAULTS.MAX_PDF_BYTES) {
+            oversizedCount++;
+          } else {
+            pendingCount++;
+          }
+        }
+      }
+
+      if (current.getFolders) {
+        const subFolders = current.getFolders();
+        while (subFolders.hasNext()) {
+          folderQueue.push(subFolders.next());
+        }
+      }
+    }
+    Logger.log(`Recursive Tree Stats: ${totalFolders} folders, ${sourceFileCount} total files (${pendingCount} pending eligible, ${ingestedCount} already ingested, ${oversizedCount} oversized >15MB, ${unsupportedCount} non-document/media)`);
+  } catch (e) {
+    Logger.log(`[FAIL] Source folder recursive crawl error: ${e.toString()}`);
+  }
+
+  let seedsFolder = null;
+  try {
+    seedsFolder = DriveApp.getFolderById(config.seedsFolderId);
+    Logger.log(`[PASS] Seeds Folder found: "${seedsFolder.getName()}" (${config.seedsFolderId})`);
+  } catch (e) {
+    Logger.log(`[FAIL] Seeds folder error: ${e.toString()}`);
+  }
+
+  return {
+    apiKeyConfigured: hasKey,
+    discoveredModels: discoveredModels,
+    activeLadder: activeLadder,
+    sourceFolder: sourceFolder ? sourceFolder.getName() : null,
+    totalFolders: totalFolders,
+    totalFiles: sourceFileCount,
+    pendingFiles: pendingCount,
+    ingestedFiles: ingestedCount,
+    oversizedFiles: oversizedCount,
+    unsupportedFiles: unsupportedCount,
+    seedsFolder: seedsFolder ? seedsFolder.getName() : null
+  };
+}
+
+/**
+ * Installs the recurring background time-driven trigger.
+ * Deletes any existing triggers for runIngestionPipeline before creating a fresh 30-minute interval trigger.
+ */
+function setupKGTriggers() {
+  const handler = 'runIngestionPipeline';
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === handler) {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+
+  ScriptApp.newTrigger(handler)
+    .timeBased()
+    .everyMinutes(30)
+    .create();
+
+  Logger.log('[SUCCESS] Installed 30-minute recurring time trigger for runIngestionPipeline');
+}
+
+```
