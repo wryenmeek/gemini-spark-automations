@@ -96,7 +96,7 @@ jobs:
           echo "| **Test Runner** | Bun v1.4.4 |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **SparkCore Subsystems** | GeminiFleet, DriveMetadata, DriveUtils, SheetKit, Harness |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Pipelines Covered** | Receipts Ingestion, Writing Style Index, Drive Tagging, Knowledge Graph |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Execution Status** | ${{ steps.bun_tests.outcome == 'success' && '✅ PASS (43/43 tests)' || '❌ FAIL' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Execution Status** | ${{ steps.bun_tests.outcome == 'success' && '✅ PASS (All Unit Tests)' || '❌ FAIL' }} |" >> "$GITHUB_STEP_SUMMARY"
 
   # --------------------------------------------------------------------------
   # 3. PYTHON & OFFLINE WHEEL BRIDGE

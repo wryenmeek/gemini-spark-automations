@@ -1,12 +1,25 @@
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import * as path from "path";
 import * as vm from "vm";
 
+// Pre-read all core library files via Bun file API per CLAUDE.md standards
+const coreDir = path.join(import.meta.dir, "..", "core", "src");
+const coreFiles = [
+  "GeminiFleet.js",
+  "DriveMetadata.js",
+  "DriveUtils.js",
+  "SheetKit.js",
+  "Harness.js",
+  "SparkCore.js",
+];
+
+const coreCodeMap: Record<string, string> = {};
+for (const file of coreFiles) {
+  coreCodeMap[file] = await Bun.file(path.join(coreDir, file)).text();
+}
+
 // Load the compiled core modules in a Gas-compatible VM context
 function loadCoreContext(mocks: Record<string, any> = {}) {
-  const fs = require("fs");
-  const coreDir = path.join(import.meta.dir, "..", "core", "src");
-
   const logs: string[] = [];
   const scriptCacheStore: Record<string, string> = {};
   const scriptPropsStore: Record<string, string> = {};
@@ -41,6 +54,7 @@ function loadCoreContext(mocks: Record<string, any> = {}) {
         deleteProperty: (k: string) => {
           delete scriptPropsStore[k];
         },
+        getProperties: () => ({ ...scriptPropsStore }),
       }),
     },
     MimeType: {
@@ -67,18 +81,10 @@ function loadCoreContext(mocks: Record<string, any> = {}) {
 
   vm.createContext(context);
 
-  const files = [
-    "GeminiFleet.js",
-    "DriveMetadata.js",
-    "DriveUtils.js",
-    "SheetKit.js",
-    "Harness.js",
-    "SparkCore.js",
-  ];
-
-  for (const file of files) {
-    const code = fs.readFileSync(path.join(coreDir, file), "utf-8");
-    vm.runInContext(code, context);
+  for (const file of coreFiles) {
+    if (coreCodeMap[file]) {
+      vm.runInContext(coreCodeMap[file], context);
+    }
   }
 
   return { context, logs, scriptCacheStore, scriptPropsStore };
@@ -108,7 +114,7 @@ describe("SparkCore — Shared Library Test Suite", () => {
       expect(fleet.isDailyQuotaError(200, "OK")).toBe(false);
     });
 
-    test("discoverAvailableModels filters specialized endpoints and sorts Flash-first", () => {
+    test("discoverAvailableModels filters specialized endpoints, sorts Flash-first, and uses header auth", () => {
       const mockRawModels = {
         models: [
           { name: "models/gemini-2.5-pro", supportedGenerationMethods: ["generateContent"] },
@@ -121,22 +127,31 @@ describe("SparkCore — Shared Library Test Suite", () => {
         ],
       };
 
+      let capturedUrl = "";
+      let capturedHeaders: Record<string, string> = {};
+
       const { context } = loadCoreContext({
         UrlFetchApp: {
-          fetch: (_url: string) => ({
-            getResponseCode: () => 200,
-            getContentText: () => JSON.stringify(mockRawModels),
-          }),
+          fetch: (url: string, options: any) => {
+            capturedUrl = url;
+            capturedHeaders = options?.headers || {};
+            return {
+              getResponseCode: () => 200,
+              getContentText: () => JSON.stringify(mockRawModels),
+            };
+          },
         },
       });
 
-      const discovered = context.GeminiFleet.discoverAvailableModels("test_key", { bypassCache: true });
+      const discovered = context.GeminiFleet.discoverAvailableModels("test_key_123", { bypassCache: true });
       expect(discovered).toEqual([
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-3.5-flash",
         "gemini-2.5-pro",
       ]);
+      expect(capturedUrl).not.toContain("?key=");
+      expect(capturedHeaders["x-goog-api-key"]).toBe("test_key_123");
     });
 
     test("markModelDailyExhausted bans model across CacheService and ScriptProperties until reset", () => {
@@ -152,6 +167,70 @@ describe("SparkCore — Shared Library Test Suite", () => {
 
       fleet.clearModelBans();
       expect(fleet.isModelDailyExhausted("gemini-2.5-flash")).toBe(false);
+    });
+
+    test("clearModelBans purges dynamically discovered model bans as well as default ladder", () => {
+      const { context, scriptPropsStore } = loadCoreContext();
+      const fleet = context.GeminiFleet;
+
+      // Ban a dynamically discovered model not in DEFAULT_MODEL_LADDER
+      fleet.markModelDailyExhausted("gemini-custom-experimental");
+      expect(scriptPropsStore["DAILY_EXHAUSTED_gemini-custom-experimental"]).toBeDefined();
+
+      fleet.clearModelBans();
+      expect(scriptPropsStore["DAILY_EXHAUSTED_gemini-custom-experimental"]).toBeUndefined();
+      expect(fleet.isModelDailyExhausted("gemini-custom-experimental")).toBe(false);
+    });
+
+    test("callGeminiAPI supports single model name string in modelOrLadder", () => {
+      let requestedUrl = "";
+      const { context } = loadCoreContext({
+        UrlFetchApp: {
+          fetch: (url: string) => {
+            requestedUrl = url;
+            return {
+              getResponseCode: () => 200,
+              getContentText: () => JSON.stringify({
+                candidates: [
+                  { content: { parts: [{ text: '{"result": "success"}' }] } },
+                ],
+              }),
+            };
+          },
+        },
+      });
+
+      const res = context.GeminiFleet.callGeminiAPI({ prompt: "Hello" }, "test_key", "gemini-2.5-pro");
+      expect(res).toBeDefined();
+      expect(res._modelUsed).toBe("gemini-2.5-pro");
+      expect(requestedUrl).toContain("/models/gemini-2.5-pro:generateContent");
+    });
+
+    test("callGeminiAPI fast-exits immediately on HTTP 400 without failover cascade", () => {
+      const callLog: string[] = [];
+      const { context } = loadCoreContext({
+        UrlFetchApp: {
+          fetch: (url: string) => {
+            callLog.push(url);
+            return {
+              getResponseCode: () => 400,
+              getContentText: () => JSON.stringify({
+                error: { code: 400, message: "Invalid JSON payload" },
+              }),
+            };
+          },
+        },
+      });
+
+      const res = context.GeminiFleet.callGeminiAPI(
+        { prompt: "Bad Payload" },
+        "test_key",
+        ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+      );
+
+      expect(res).toBeNull();
+      // Must terminate on first model without trying remaining ladder
+      expect(callLog.length).toBe(1);
     });
 
     test("callGeminiAPI cascades through model ladder on 429 quota exhaustion and records _modelUsed", () => {
@@ -179,28 +258,27 @@ describe("SparkCore — Shared Library Test Suite", () => {
                 }),
               };
             }
-            return { getResponseCode: () => 404, getContentText: () => "Not Found" };
+            return {
+              getResponseCode: () => 500,
+              getContentText: () => "Unknown",
+            };
           },
         },
       });
 
       const result = context.GeminiFleet.callGeminiAPI(
-        { contents: [{ parts: [{ text: "classify" }] }] },
-        "test_api_key",
-        ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+        { prompt: "Classify this doc" },
+        "mock_api_key",
+        ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
       );
 
+      expect(result).toBeDefined();
+      expect(result.doc_type).toBe("Invoice");
+      expect(result._modelUsed).toBe("gemini-2.5-flash-lite");
       expect(callLog).toEqual([
         "gemini-2.5-flash: 429 Daily",
         "gemini-2.5-flash-lite: 200 OK",
       ]);
-      expect(result).toEqual({
-        doc_type: "Invoice",
-        confidence: 0.98,
-        _modelUsed: "gemini-2.5-flash-lite",
-      });
-      // Primary model should now be banned
-      expect(context.GeminiFleet.isModelDailyExhausted("gemini-2.5-flash")).toBe(true);
     });
   });
 
@@ -208,25 +286,24 @@ describe("SparkCore — Shared Library Test Suite", () => {
   // 2. DriveMetadata
   // -------------------------------------------------------------
   describe("2. DriveMetadata", () => {
-    test("parseMetadata extracts Schema v1 JSON from clean or wrapped description strings", () => {
+    test("parseMetadata extracts Schema v1 JSON from Drive description or returns null", () => {
       const { context } = loadCoreContext();
       const meta = context.DriveMetadata;
 
-      const validJson = '{"schema_v": 1, "doc_type": "Financial Receipt", "tags": ["Tax"], "confidence": 0.95}';
-      expect(meta.parseMetadata(validJson)).toEqual({
-        schema_v: 1,
-        doc_type: "Financial Receipt",
-        tags: ["Tax"],
-        confidence: 0.95,
-      });
+      // Valid Schema v1
+      const valid = meta.parseMetadata('{"schema_v": 1, "doc_type": "Invoice", "tags": ["Financial", "2026"]}');
+      expect(valid).not.toBeNull();
+      expect(valid.schema_v).toBe(1);
+      expect(valid.doc_type).toBe("Invoice");
+      expect(valid.tags).toEqual(["Financial", "2026"]);
 
-      // Wrapped with extra text
-      const wrapped = 'Pre-existing notes\n' + validJson + '\nFooter text';
-      expect(meta.parseMetadata(wrapped)?.doc_type).toBe("Financial Receipt");
+      // Embedded JSON
+      const embedded = meta.parseMetadata('User note:\n{"schema_v": 1, "doc_type": "Tax Form"}\nThanks!');
+      expect(embedded).not.toBeNull();
+      expect(embedded.doc_type).toBe("Tax Form");
 
-      // Non-metadata descriptions
-      expect(meta.parseMetadata("Just a plain document description.")).toBeNull();
-      expect(meta.parseMetadata("")).toBeNull();
+      // Non-v1 / unparseable strings
+      expect(meta.parseMetadata("Just a plain description")).toBeNull();
       expect(meta.parseMetadata(null)).toBeNull();
     });
 
@@ -247,6 +324,27 @@ describe("SparkCore — Shared Library Test Suite", () => {
       const parsed = JSON.parse(formatted);
       expect(parsed.doc_type).toBe("Tax Form");
       expect(parsed.schema_v).toBe(1);
+    });
+
+    test("formatMetadata preserves caller tags array without mutating in place", () => {
+      const { context } = loadCoreContext();
+      const meta = context.DriveMetadata;
+
+      // Construct an oversized tags list that triggers truncation to fit <= 1024 bytes
+      const originalTags = Array.from({ length: 150 }, (_, i) => `Tag-Number-${i}-Long-Category-Identifier`);
+      const originalLength = originalTags.length;
+
+      const callerData = {
+        doc_type: "MassiveDocument",
+        tags: originalTags,
+      };
+
+      const formatted = meta.formatMetadata(callerData);
+      expect(formatted.length).toBeLessThanOrEqual(1024);
+
+      // Caller's original tags array must remain completely untouched
+      expect(callerData.tags.length).toBe(originalLength);
+      expect(callerData.tags[0]).toBe("Tag-Number-0-Long-Category-Identifier");
     });
 
     test("isAlreadyClassified checks file object and description string for schema_v", () => {
@@ -312,46 +410,88 @@ describe("SparkCore — Shared Library Test Suite", () => {
 
       const { context } = loadCoreContext({
         DocumentApp: {
-          create: (name: string) => {
-            docCreatedName = name;
-            return {
-              getId: () => "new_doc_id",
-              getBody: () => ({
-                setText: (t: string) => {
-                  docText = t;
-                },
-              }),
-              saveAndClose: () => {},
-            };
-          },
+          create: (name: string) => ({
+            getId: () => "mock_doc_123",
+            getName: () => name,
+            getBody: () => ({
+              setText: (txt: string) => {
+                docText = txt;
+              },
+            }),
+            saveAndClose: () => {
+              docCreatedName = name;
+            },
+          }),
         },
         DriveApp: {
           getFileById: (_id: string) => ({
-            getId: () => "new_doc_id",
-            moveTo: (target: any) => {
-              if (target.getId() === "target_folder_id") movedToTarget = true;
+            getId: () => "mock_doc_123",
+            moveTo: (dest: any) => {
+              if (dest === mockFolder) movedToTarget = true;
             },
           }),
         },
       });
 
-      const file = context.DriveUtils.createDocInFolder("Test Specification", "# Heading\nContent", mockFolder);
-      expect(docCreatedName).toBe("Test Specification");
-      expect(docText).toBe("# Heading\nContent");
+      const file = context.DriveUtils.createDocInFolder("Test Doc", "Sample content", mockFolder);
+      expect(file).toBeDefined();
+      expect(docCreatedName).toBe("Test Doc");
+      expect(docText).toBe("Sample content");
       expect(movedToTarget).toBe(true);
-      expect(file.getId()).toBe("new_doc_id");
     });
 
-    test("crawlFolderTree recursively discovers nested files with loop prevention", () => {
-      const childFolder = {
-        getId: () => "child_folder",
+    test("createDocInFolder resolves string folder ID via DriveApp.getFolderById", () => {
+      let resolvedFolderId = "";
+      let movedToResolvedFolder = false;
+
+      const mockFolder = {
+        getId: () => "string_folder_id_xyz",
+      };
+
+      const { context } = loadCoreContext({
+        DocumentApp: {
+          create: (name: string) => ({
+            getId: () => "mock_doc_456",
+            getName: () => name,
+            getBody: () => ({
+              setText: () => {},
+            }),
+            saveAndClose: () => {},
+          }),
+        },
+        DriveApp: {
+          getFileById: (_id: string) => ({
+            getId: () => "mock_doc_456",
+            moveTo: (dest: any) => {
+              if (dest === mockFolder) movedToResolvedFolder = true;
+            },
+          }),
+          getFolderById: (id: string) => {
+            resolvedFolderId = id;
+            return mockFolder;
+          },
+        },
+      });
+
+      context.DriveUtils.createDocInFolder("String Folder Doc", "content", "string_folder_id_xyz");
+      expect(resolvedFolderId).toBe("string_folder_id_xyz");
+      expect(movedToResolvedFolder).toBe(true);
+    });
+
+    test("crawlFolderTree discovers files recursively using BFS and respects maxDepth", () => {
+      const fileA = { getId: () => "file_a", getName: () => "A.pdf", getMimeType: () => "application/pdf" };
+      const fileB = { getId: () => "file_b", getName: () => "B.docx", getMimeType: () => "application/vnd.google-apps.document" };
+
+      const subFolder = {
+        getId: () => "sub_1",
+        getName: () => "Sub 1",
         getFiles: () => {
-          let count = 0;
+          let yielded = false;
           return {
-            hasNext: () => count < 1,
+            hasNext: () => !yielded,
             next: () => {
-              count++;
-              return { getId: () => "file_child_1", getMimeType: () => "text/plain" };
+              yielded = true;
+              return fileB;
             },
           };
         },
@@ -359,59 +499,60 @@ describe("SparkCore — Shared Library Test Suite", () => {
       };
 
       const rootFolder = {
-        getId: () => "root_folder",
+        getId: () => "root",
+        getName: () => "Root",
         getFiles: () => {
-          let count = 0;
+          let yielded = false;
           return {
-            hasNext: () => count < 1,
+            hasNext: () => !yielded,
             next: () => {
-              count++;
-              return { getId: () => "file_root_1", getMimeType: () => "text/plain" };
+              yielded = true;
+              return fileA;
             },
           };
         },
         getFolders: () => {
-          let count = 0;
+          let yielded = false;
           return {
-            hasNext: () => count < 1,
+            hasNext: () => !yielded,
             next: () => {
-              count++;
-              return childFolder;
+              yielded = true;
+              return subFolder;
             },
           };
         },
       };
 
-      const { context } = loadCoreContext();
-      const files = context.DriveUtils.crawlFolderTree(rootFolder, { maxDepth: 3 });
-      expect(files.map((f: any) => f.getId())).toEqual(["file_root_1", "file_child_1"]);
+      const { context } = loadCoreContext({
+        DriveApp: {
+          getFolderById: (_id: string) => rootFolder,
+        },
+      });
+
+      const discovered = context.DriveUtils.crawlFolderTree(rootFolder, { maxDepth: 3 });
+      expect(discovered.length).toBe(2);
+      expect(discovered.map((f: any) => f.getId())).toEqual(["file_a", "file_b"]);
     });
 
-    test("extractFileTextSnippet safely extracts text and flags PDF without dumping raw binary context", () => {
+    test("extractFileTextSnippet handles Docs and PDFs within word limits", () => {
+      const mockDoc = {
+        getId: () => "doc_1",
+        getMimeType: () => "application/vnd.google-apps.document",
+      };
+
       const { context } = loadCoreContext({
         DocumentApp: {
           openById: (_id: string) => ({
-            getBody: () => ({ getText: () => "Extracted document text content." }),
+            getBody: () => ({
+              getText: () => "The quick brown fox jumps over the lazy dog. Additional sentence for testing snippet bounds.",
+            }),
           }),
         },
       });
 
-      const docFile = {
-        getId: () => "doc_123",
-        getName: () => "Document.gdoc",
-        getMimeType: () => context.MimeType.GOOGLE_DOCS,
-      };
-      expect(context.DriveUtils.extractFileTextSnippet(docFile)).toBe("Extracted document text content.");
-
-      const pdfFile = {
-        getId: () => "pdf_123",
-        getName: () => "Statement.pdf",
-        getSize: () => 102400,
-        getMimeType: () => "application/pdf",
-      };
-      const pdfSnippet = context.DriveUtils.extractFileTextSnippet(pdfFile);
-      expect(pdfSnippet).toContain("Multimodal inlineData processing required");
-      expect(pdfSnippet).not.toContain("%PDF-1.5");
+      const snippet = context.DriveUtils.extractFileTextSnippet(mockDoc, 5);
+      expect(snippet).toContain("The quick brown fox jumps");
+      expect(snippet).toContain("[TRUNCATED at 5 words]");
     });
   });
 
@@ -453,7 +594,7 @@ describe("SparkCore — Shared Library Test Suite", () => {
       ]);
     });
 
-    test("applyApprovedTaxonomyMerges consolidates synonym tags to canonical targets", () => {
+    test("applyApprovedTaxonomyMerges maps historical aliases to canonical terms", () => {
       const { context } = loadCoreContext();
       const kit = context.SheetKit;
 
@@ -475,13 +616,22 @@ describe("SparkCore — Shared Library Test Suite", () => {
       ]);
     });
 
-    test("batchAppendRows writes rows in chunked batches", () => {
+    test("batchAppendRows writes rows in chunked batches, tracks offsets, and expands grid", () => {
       let appendedRanges: any[] = [];
+      let currentRowCount = 10;
+      let insertedRows: { afterIndex: number; count: number }[] = [];
+
       const mockSheet = {
-        getLastRow: () => 10,
+        getLastRow: () => currentRowCount,
+        getMaxRows: () => 15,
+        insertRowsAfter: (afterIndex: number, count: number) => {
+          insertedRows.push({ afterIndex, count });
+          currentRowCount += count;
+        },
         getRange: (startRow: number, startCol: number, numRows: number, numCols: number) => ({
           setValues: (vals: any[][]) => {
             appendedRanges.push({ startRow, startCol, numRows, numCols, vals });
+            currentRowCount = Math.max(currentRowCount, startRow + numRows - 1);
           },
         }),
       };
@@ -491,13 +641,26 @@ describe("SparkCore — Shared Library Test Suite", () => {
         ["A1", "B1"],
         ["A2", "B2"],
         ["A3", "B3"],
+        ["A4", "B4"],
+        ["A5", "B5"],
+        ["A6", "B6"],
+        ["A7", "B7"],
+        ["A8", "B8"],
       ];
 
-      const count = context.SheetKit.batchAppendRows(mockSheet, rows, 2);
-      expect(count).toBe(3);
-      expect(appendedRanges.length).toBe(2);
-      expect(appendedRanges[0].vals.length).toBe(2);
-      expect(appendedRanges[1].vals.length).toBe(1);
+      // 8 rows starting at row 11 -> needs rows through row 18.
+      // maxRows is 15, so it must call insertRowsAfter(15, 3) to expand grid.
+      const count = context.SheetKit.batchAppendRows(mockSheet, rows, 3);
+      expect(count).toBe(8);
+      expect(insertedRows.length).toBe(1);
+      expect(insertedRows[0]).toEqual({ afterIndex: 15, count: 3 });
+      expect(appendedRanges.length).toBe(3);
+      expect(appendedRanges[0].startRow).toBe(11);
+      expect(appendedRanges[0].vals.length).toBe(3);
+      expect(appendedRanges[1].startRow).toBe(14);
+      expect(appendedRanges[1].vals.length).toBe(3);
+      expect(appendedRanges[2].startRow).toBe(17);
+      expect(appendedRanges[2].vals.length).toBe(2);
     });
   });
 

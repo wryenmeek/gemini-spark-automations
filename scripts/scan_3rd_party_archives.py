@@ -23,7 +23,7 @@ def parse_ls_output(output):
             size_unit = parts[-1]
             size_val = parts[-2]
             ftype = parts[-3]
-            fname = " ".join(parts[1:-3])
+            fname = " ".join(parts[1:-3]) if len(parts) > 4 else parts[1]
 
             # Convert size to MB float
             size_mb = 0.0
@@ -83,7 +83,6 @@ def main():
     while queue:
         curr_id, curr_path = queue.pop(0)
         folder_count += 1
-        curr_path.split("/")[-1]
 
         items = list_folder(curr_id)
         sub_folder_count = 0

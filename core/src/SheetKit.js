@@ -174,12 +174,23 @@ var SheetKit = (function() {
     if (!sheet || !Array.isArray(rows) || rows.length === 0) return 0;
     chunkSize = chunkSize || 50;
 
+    const totalNewRows = rows.length;
+    let currentRow = sheet.getLastRow() + 1;
+    const requiredMaxRows = currentRow + totalNewRows - 1;
+
+    if (typeof sheet.getMaxRows === "function" && typeof sheet.insertRowsAfter === "function") {
+      const currentMaxRows = sheet.getMaxRows();
+      if (requiredMaxRows > currentMaxRows) {
+        sheet.insertRowsAfter(currentMaxRows, requiredMaxRows - currentMaxRows);
+      }
+    }
+
     let appendedCount = 0;
     for (let i = 0; i < rows.length; i += chunkSize) {
       const chunk = rows.slice(i, i + chunkSize);
-      const startRow = sheet.getLastRow() + 1;
       const numCols = chunk[0].length;
-      sheet.getRange(startRow, 1, chunk.length, numCols).setValues(chunk);
+      sheet.getRange(currentRow, 1, chunk.length, numCols).setValues(chunk);
+      currentRow += chunk.length;
       appendedCount += chunk.length;
     }
 

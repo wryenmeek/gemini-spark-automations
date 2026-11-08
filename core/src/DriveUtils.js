@@ -41,13 +41,19 @@ var DriveUtils = (function() {
     if (typeof DriveApp !== "undefined") {
       file = DriveApp.getFileById(doc.getId());
       if (targetFolder) {
-        if (typeof file.moveTo === "function") {
-          file.moveTo(targetFolder);
-        } else if (typeof targetFolder.addFile === "function") {
-          targetFolder.addFile(file);
-          try {
-            DriveApp.getRootFolder().removeFile(file);
-          } catch (_) {}
+        let destFolder = targetFolder;
+        if (typeof targetFolder === "string" && typeof DriveApp.getFolderById === "function") {
+          destFolder = DriveApp.getFolderById(targetFolder);
+        }
+        if (destFolder) {
+          if (typeof file.moveTo === "function") {
+            file.moveTo(destFolder);
+          } else if (typeof destFolder.addFile === "function") {
+            destFolder.addFile(file);
+            try {
+              DriveApp.getRootFolder().removeFile(file);
+            } catch (_) {}
+          }
         }
       }
     }

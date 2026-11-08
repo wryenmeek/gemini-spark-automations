@@ -7,16 +7,15 @@ or bisection page-budgeting, creates an 'Extracted_Chapters' folder in each publ
 Drive directory, and uploads the chunks for autonomous Apps Script ingestion.
 """
 
-import os
-import sys
 import json
+import os
+import random
 import re
 import shutil
-import tempfile
 import subprocess
+import sys
 import time
-import random
-from pathlib import Path
+
 import pymupdf
 
 MAX_CHUNK_MB = 13.5  # Safe buffer below Apps Script 15.0 MB limit
@@ -40,9 +39,7 @@ PUBLISHER_FOLDERS = {
 }
 
 # Known pre-existing Extracted_Chapters folder for MCDM Archive
-EXISTING_EXTRACTED_FOLDERS = {
-    "MCDM Archive": "1RdzBAGF4aFYbVmU-1T_NiD7kHt8EB8yp"
-}
+EXISTING_EXTRACTED_FOLDERS = {"MCDM Archive": "1RdzBAGF4aFYbVmU-1T_NiD7kHt8EB8yp"}
 
 # Files/keywords already completed earlier today
 ALREADY_COMPLETED_KEYWORDS = [
@@ -53,18 +50,22 @@ ALREADY_COMPLETED_KEYWORDS = [
 ]
 
 
-def load_state():
-    if os.path.exists(STATE_FILE):
+def load_state(state_file=STATE_FILE):
+    if os.path.exists(state_file):
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+            with open(state_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
-    return {"processed_ids": {}, "publisher_extracted_folders": EXISTING_EXTRACTED_FOLDERS.copy()}
+    return {
+        "processed_ids": {},
+        "publisher_extracted_folders": EXISTING_EXTRACTED_FOLDERS.copy(),
+        "extracted_folders": {},
+    }
 
 
-def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+def save_state(state, state_file=STATE_FILE):
+    with open(state_file, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
 
@@ -86,41 +87,58 @@ def get_remote_drive_items(folder_id):
     return items
 
 
-def get_or_create_extracted_folder(publisher_name, state):
-    """Finds or creates the Extracted_Chapters folder in the publisher's Drive folder."""
-    if publisher_name in state["publisher_extracted_folders"]:
+def get_or_create_extracted_folder(parent_id, folder_label, state, state_file=STATE_FILE):
+    """Finds or creates the Extracted_Chapters folder in the target Drive folder."""
+    if "extracted_folders" not in state:
+        state["extracted_folders"] = {}
+
+    if parent_id in state["extracted_folders"]:
+        return state["extracted_folders"][parent_id]
+
+    # Check if folder already exists in Drive
+    items = get_remote_drive_items(parent_id)
+    if "Extracted_Chapters" in items and "folder" in items["Extracted_Chapters"]["type"]:
+        folder_id = items["Extracted_Chapters"]["id"]
+        print(f"  [FOUND] Extracted_Chapters folder for {folder_label} ({parent_id}): {folder_id}")
+        state["extracted_folders"][parent_id] = folder_id
+        save_state(state, state_file)
+        return folder_id
+
+    # Create Extracted_Chapters folder
+    print(f"  [MKDIR] Creating 'Extracted_Chapters' in {folder_label} ({parent_id})...")
+    cmd = ["gdrive", "mutate", "mkdir", "Extracted_Chapters", "--parent", parent_id]
+    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if res.returncode == 0:
+        items = get_remote_drive_items(parent_id)
+        if "Extracted_Chapters" in items:
+            folder_id = items["Extracted_Chapters"]["id"]
+            print(f"  [CREATED] Extracted_Chapters folder for {folder_label}: {folder_id}")
+            state["extracted_folders"][parent_id] = folder_id
+            save_state(state, state_file)
+            return folder_id
+
+    print(f"[ERROR] Failed to create Extracted_Chapters in {folder_label}: {res.stderr}")
+    return parent_id
+
+
+def get_or_create_extracted_folder_by_publisher(publisher_name, state, state_file=STATE_FILE):
+    """Legacy publisher fallback for 3rd Party Archives."""
+    if publisher_name in state.get("publisher_extracted_folders", {}):
         return state["publisher_extracted_folders"][publisher_name]
 
     pub_folder_id = PUBLISHER_FOLDERS.get(publisher_name)
     if not pub_folder_id:
-        print(f"[WARN] Unknown publisher '{publisher_name}', falling back to MCDM Extracted_Chapters")
+        print(
+            f"[WARN] Unknown publisher '{publisher_name}', falling back to MCDM Extracted_Chapters"
+        )
         return EXISTING_EXTRACTED_FOLDERS["MCDM Archive"]
 
-    # Check if folder already exists in Drive
-    items = get_remote_drive_items(pub_folder_id)
-    if "Extracted_Chapters" in items and "folder" in items["Extracted_Chapters"]["type"]:
-        folder_id = items["Extracted_Chapters"]["id"]
-        print(f"  [FOUND] Extracted_Chapters folder for {publisher_name}: {folder_id}")
-        state["publisher_extracted_folders"][publisher_name] = folder_id
-        save_state(state)
-        return folder_id
-
-    # Create Extracted_Chapters folder
-    print(f"  [MKDIR] Creating 'Extracted_Chapters' in {publisher_name} ({pub_folder_id})...")
-    cmd = ["gdrive", "mutate", "mkdir", "Extracted_Chapters", "--parent", pub_folder_id]
-    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if res.returncode == 0:
-        # Re-fetch items to get ID
-        items = get_remote_drive_items(pub_folder_id)
-        if "Extracted_Chapters" in items:
-            folder_id = items["Extracted_Chapters"]["id"]
-            print(f"  [CREATED] Extracted_Chapters folder for {publisher_name}: {folder_id}")
-            state["publisher_extracted_folders"][publisher_name] = folder_id
-            save_state(state)
-            return folder_id
-
-    print(f"[ERROR] Failed to create Extracted_Chapters in {publisher_name}: {res.stderr}")
-    return pub_folder_id
+    folder_id = get_or_create_extracted_folder(pub_folder_id, publisher_name, state, state_file)
+    if "publisher_extracted_folders" not in state:
+        state["publisher_extracted_folders"] = {}
+    state["publisher_extracted_folders"][publisher_name] = folder_id
+    save_state(state, state_file)
+    return folder_id
 
 
 def download_file(file_id, dest_path):
@@ -156,7 +174,9 @@ def save_and_enforce_size(doc, start_idx, end_idx, base_filename, out_dir):
 
     # If single page exceeds limit, optimize via 150 DPI rasterization
     if page_count <= 1:
-        print(f"    [OPTIMIZE SINGLE PAGE] Page {start_idx+1} is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Re-rasterizing at 150 DPI...")
+        print(
+            f"    [OPTIMIZE SINGLE PAGE] Page {start_idx + 1} is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Re-rasterizing at 150 DPI..."
+        )
         page = doc[start_idx]
         pix = page.get_pixmap(dpi=150)
         opt_doc = pymupdf.open()
@@ -168,17 +188,23 @@ def save_and_enforce_size(doc, start_idx, end_idx, base_filename, out_dir):
             print(f"    [CHUNK OPTIMIZED] {base_filename}.pdf (1 pp, {opt_mb:.2f} MB)")
             return [out_path]
         else:
-            print(f"    [DISCARD OVERSIZED] Even at 150 DPI, {base_filename}.pdf is {opt_mb:.2f} MB. Skipping.")
+            print(
+                f"    [DISCARD OVERSIZED] Even at 150 DPI, {base_filename}.pdf is {opt_mb:.2f} MB. Skipping."
+            )
             os.remove(out_path)
             return []
 
     # Bisect oversized slice
     os.remove(out_path)
     mid_idx = start_idx + (page_count // 2) - 1
-    print(f"    [BISECT] {base_filename}.pdf is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Bisecting at page {mid_idx+1}...")
+    print(
+        f"    [BISECT] {base_filename}.pdf is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Bisecting at page {mid_idx + 1}..."
+    )
     parts = []
     parts.extend(save_and_enforce_size(doc, start_idx, mid_idx, f"{base_filename}_Part1", out_dir))
-    parts.extend(save_and_enforce_size(doc, mid_idx + 1, end_idx, f"{base_filename}_Part2", out_dir))
+    parts.extend(
+        save_and_enforce_size(doc, mid_idx + 1, end_idx, f"{base_filename}_Part2", out_dir)
+    )
     return parts
 
 
@@ -196,15 +222,25 @@ def chunk_pdf_document(pdf_path, out_dir, prefix):
 
     # Filter TOC for level 1 bookmarks
     l1_entries = [(title.strip(), page) for level, title, page in toc if level == 1 and page > 0]
-    
+
     # If Level 1 is too coarse (e.g. only 1 or 2 parts), try Level 2
     if len(l1_entries) <= 2 and len([t for level, t, p in toc if level == 2]) >= 4:
-        l1_entries = [(title.strip(), page) for level, title, page in toc if level in (1, 2) and page > 0]
+        l1_entries = [
+            (title.strip(), page) for level, title, page in toc if level in (1, 2) and page > 0
+        ]
 
     # Clean and deduplicate entries by page
     cleaned_entries = []
     seen_pages = set()
-    skip_titles = {"credits", "foreword", "table of contents", "contents", "open game license", "legal", "title page"}
+    skip_titles = {
+        "credits",
+        "foreword",
+        "table of contents",
+        "contents",
+        "open game license",
+        "legal",
+        "title page",
+    }
     for title, page in l1_entries:
         if title.lower() in skip_titles:
             continue
@@ -221,30 +257,34 @@ def chunk_pdf_document(pdf_path, out_dir, prefix):
         if cleaned_entries[0][1] > 1:
             intro_end = cleaned_entries[0][1] - 2
             if intro_end >= 0:
-                files = save_and_enforce_size(doc, 0, intro_end, f"{prefix}_00_FrontMatter", out_dir)
+                files = save_and_enforce_size(
+                    doc, 0, intro_end, f"{prefix}_00_FrontMatter", out_dir
+                )
                 generated_files.extend(files)
 
         for i in range(len(cleaned_entries)):
             title, start_page = cleaned_entries[i]
             start_idx = start_page - 1
-            end_idx = (cleaned_entries[i+1][1] - 2) if i + 1 < len(cleaned_entries) else total_pages - 1
+            end_idx = (
+                (cleaned_entries[i + 1][1] - 2) if i + 1 < len(cleaned_entries) else total_pages - 1
+            )
             end_idx = max(end_idx, start_idx)
-            safe_title = re.sub(r'[^a-zA-Z0-9_-]', '_', title)[:40].strip('_')
-            base_name = f"{prefix}_{i+1:02d}_{safe_title}"
+            safe_title = re.sub(r"[^a-zA-Z0-9_-]", "_", title)[:40].strip("_")
+            base_name = f"{prefix}_{i + 1:02d}_{safe_title}"
             files = save_and_enforce_size(doc, start_idx, end_idx, base_name, out_dir)
             generated_files.extend(files)
     else:
         # Fallback: Page-budgeted slicing
-        print(f"  [STRATEGY] No detailed TOC found. Using page-budgeting fallback.")
+        print("  [STRATEGY] No detailed TOC found. Using page-budgeting fallback.")
         avg_mb_per_page = total_mb / max(1, total_pages)
         # Aim for ~8MB chunks
         pages_per_chunk = max(4, int(8.0 / max(0.01, avg_mb_per_page)))
         print(f"  [PAGE BUDGET] ~{pages_per_chunk} pages per chunk ({avg_mb_per_page:.2f} MB/page)")
-        
+
         chunk_idx = 1
         for start_idx in range(0, total_pages, pages_per_chunk):
             end_idx = min(start_idx + pages_per_chunk - 1, total_pages - 1)
-            base_name = f"{prefix}_Part{chunk_idx:02d}_p{start_idx+1:04d}_p{end_idx+1:04d}"
+            base_name = f"{prefix}_Part{chunk_idx:02d}_p{start_idx + 1:04d}_p{end_idx + 1:04d}"
             files = save_and_enforce_size(doc, start_idx, end_idx, base_name, out_dir)
             generated_files.extend(files)
             chunk_idx += 1
@@ -262,7 +302,9 @@ def upload_chunks(chunk_files, remote_folder_id):
         fname = os.path.basename(f)
         fsize_mb = os.path.getsize(f) / (1024 * 1024)
         if fsize_mb > MAX_CHUNK_MB:
-            print(f"    [FAIL-CLOSED GUARD] Rejecting {fname} ({fsize_mb:.2f} MB > {MAX_CHUNK_MB} MB)!")
+            print(
+                f"    [FAIL-CLOSED GUARD] Rejecting {fname} ({fsize_mb:.2f} MB > {MAX_CHUNK_MB} MB)!"
+            )
             continue
         if fname in existing_items:
             print(f"    [SKIP] Already in Drive: {fname}")
@@ -281,8 +323,10 @@ def upload_chunks(chunk_files, remote_folder_id):
                 uploaded_count += 1
                 break
             elif "RATE_LIMIT_EXCEEDED" in res.stderr or "Quota exceeded" in res.stderr:
-                wait_sec = (2 ** attempt) * 4 + random.uniform(1.0, 3.0)
-                print(f"    [RATE LIMIT] Drive 403 hit. Backing off for {wait_sec:.1f}s before retry (attempt {attempt+1}/4)...")
+                wait_sec = (2**attempt) * 4 + random.uniform(1.0, 3.0)
+                print(
+                    f"    [RATE LIMIT] Drive 403 hit. Backing off for {wait_sec:.1f}s before retry (attempt {attempt + 1}/4)..."
+                )
                 time.sleep(wait_sec)
             else:
                 print(f"    [UPLOAD ERROR] {fname}: {res.stderr.strip()[:100]}")
@@ -290,33 +334,38 @@ def upload_chunks(chunk_files, remote_folder_id):
     return uploaded_count
 
 
-def process_single_file(item, state, upload=True):
+def process_single_file(item, state, state_file=STATE_FILE, upload=True, skip_keywords=False):
     file_id = item["id"]
     file_name = item["name"]
-    file_path = item["path"]
+    file_path = item.get("path", file_name)
     size_mb = item["size_mb"]
+    parent_id = item.get("parent_id")
+    parent_path = item.get("parent_path", "")
 
     parts = file_path.split("/")
     publisher = parts[1] if len(parts) > 1 else "Unknown"
 
-    print(f"\n========================================================")
+    print("\n========================================================")
     print(f"Processing: [{size_mb:.1f} MB] {file_name}")
-    print(f"Publisher:  {publisher}")
+    print(f"Path:       {file_path}")
     print(f"File ID:    {file_id}")
-    print(f"========================================================")
+    if parent_id:
+        print(f"Parent ID:  {parent_id} ({parent_path})")
+    print("========================================================")
 
     # Check if already processed
-    if file_id in state["processed_ids"]:
+    if file_id in state.get("processed_ids", {}):
         print(f"  [ALREADY PROCESSED] File ID {file_id} in state. Skipping.")
         return True
 
     # Check if already completed name (e.g. Flee Mortals, Where Evil Lives, Creature Codex)
-    clean_low = file_name.lower().replace("_", " ")
-    if any(k in file_name.lower() or k in clean_low for k in ALREADY_COMPLETED_KEYWORDS):
-        print(f"  [ALREADY COMPLETED] {file_name} was pre-chunked. Marking done.")
-        state["processed_ids"][file_id] = {"status": "already_chunked", "publisher": publisher}
-        save_state(state)
-        return True
+    if skip_keywords:
+        clean_low = file_name.lower().replace("_", " ")
+        if any(k in file_name.lower() or k in clean_low for k in ALREADY_COMPLETED_KEYWORDS):
+            print(f"  [ALREADY COMPLETED] {file_name} was pre-chunked. Marking done.")
+            state["processed_ids"][file_id] = {"status": "already_chunked", "publisher": publisher}
+            save_state(state, state_file)
+            return True
 
     # Setup local workspace
     book_work_dir = os.path.join(TEMP_WORK_DIR, file_id)
@@ -339,8 +388,8 @@ def process_single_file(item, state, upload=True):
         return False
 
     # Generate Prefix
-    safe_name = re.sub(r'[^a-zA-Z0-9]', '_', os.path.splitext(file_name)[0])
-    prefix = safe_name[:25].strip('_')
+    safe_name = re.sub(r"[^a-zA-Z0-9]", "_", os.path.splitext(file_name)[0])
+    prefix = safe_name[:25].strip("_")
 
     # Chunk PDF
     chunks_dir = os.path.join(book_work_dir, "chunks")
@@ -350,7 +399,14 @@ def process_single_file(item, state, upload=True):
     print(f"\n  [CHUNKING COMPLETE] Generated {len(chunks)} sub-PDFs for {file_name}")
 
     if upload and chunks:
-        remote_folder_id = get_or_create_extracted_folder(publisher, state)
+        if parent_id:
+            remote_folder_id = get_or_create_extracted_folder(
+                parent_id, parent_path or publisher, state, state_file
+            )
+        else:
+            remote_folder_id = get_or_create_extracted_folder_by_publisher(
+                publisher, state, state_file
+            )
         print(f"  [UPLOAD TARGET] Folder: {remote_folder_id}")
         uploaded = upload_chunks(chunks, remote_folder_id)
         print(f"  [UPLOAD RESULT] {uploaded}/{len(chunks)} chunks verified in Drive.")
@@ -360,10 +416,11 @@ def process_single_file(item, state, upload=True):
         "status": "completed",
         "file_name": file_name,
         "publisher": publisher,
+        "parent_path": parent_path,
         "size_mb": size_mb,
-        "chunk_count": len(chunks)
+        "chunk_count": len(chunks),
     }
-    save_state(state)
+    save_state(state, state_file)
 
     # Clean up book workspace
     shutil.rmtree(book_work_dir, ignore_errors=True)
@@ -373,25 +430,38 @@ def process_single_file(item, state, upload=True):
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Fleet Pre-Chunker Runner")
-    parser.add_argument("--publisher", type=str, default="", help="Filter by publisher name substring")
+    parser.add_argument(
+        "--inventory", type=str, default=INVENTORY_JSON, help="Path to inventory JSON"
+    )
+    parser.add_argument("--state-file", type=str, default=STATE_FILE, help="Path to state file")
+    parser.add_argument(
+        "--skip-keywords", action="store_true", help="Skip books matching legacy keywords"
+    )
+    parser.add_argument(
+        "--publisher", type=str, default="", help="Filter by publisher/folder name substring"
+    )
     parser.add_argument("--file-id", type=str, default="", help="Process specific file ID")
     parser.add_argument("--no-upload", action="store_true", help="Do not upload chunks to Drive")
     parser.add_argument("--limit", type=int, default=0, help="Limit number of books to process")
     args = parser.parse_args()
 
-    if not os.path.exists(INVENTORY_JSON):
-        print(f"[ERROR] Inventory file {INVENTORY_JSON} not found. Run crawler first.")
+    inventory_file = args.inventory
+    state_file = args.state_file
+
+    if not os.path.exists(inventory_file):
+        print(f"[ERROR] Inventory file {inventory_file} not found. Run crawler first.")
         sys.exit(1)
 
-    with open(INVENTORY_JSON, "r", encoding="utf-8") as f:
+    with open(inventory_file, "r", encoding="utf-8") as f:
         inventory = json.load(f)
 
     oversized = inventory.get("oversized_pdfs", [])
     print(f"Total oversized PDFs in inventory: {len(oversized)}")
 
-    state = load_state()
-    print(f"Loaded state with {len(state['processed_ids'])} previously processed files.")
+    state = load_state(state_file)
+    print(f"Loaded state with {len(state.get('processed_ids', {}))} previously processed files.")
 
     # Filter target books
     targets = []
@@ -404,27 +474,33 @@ def main():
 
         if args.file_id and item["id"] != args.file_id:
             continue
-        if args.publisher and args.publisher.lower() not in item["path"].lower():
+        if args.publisher and args.publisher.lower() not in item.get("path", "").lower():
             continue
         targets.append(item)
 
-    # Sort targets: largest first or by publisher
+    # Sort targets: largest first
     targets.sort(key=lambda x: x["size_mb"], reverse=True)
     if args.limit > 0:
-        targets = targets[:args.limit]
+        targets = targets[: args.limit]
 
     print(f"Targeting {len(targets)} oversized books for pre-chunking.")
 
     success_count = 0
     for idx, item in enumerate(targets):
-        print(f"\n>>> [{idx+1}/{len(targets)}] Progressing book {item['name']}...")
-        if process_single_file(item, state, upload=not args.no_upload):
+        print(f"\n>>> [{idx + 1}/{len(targets)}] Progressing book {item['name']}...")
+        if process_single_file(
+            item,
+            state,
+            state_file=state_file,
+            upload=not args.no_upload,
+            skip_keywords=args.skip_keywords,
+        ):
             success_count += 1
 
-    print(f"\n========================================================")
-    print(f"FLEET PRE-CHUNKING BATCH COMPLETE")
+    print("\n========================================================")
+    print("FLEET PRE-CHUNKING BATCH COMPLETE")
     print(f"Processed: {success_count}/{len(targets)} books successfully.")
-    print(f"========================================================")
+    print("========================================================")
 
 
 if __name__ == "__main__":

@@ -54,6 +54,9 @@ var DriveMetadata = (function() {
     }
 
     const payload = Object.assign({}, data);
+    if (Array.isArray(data.tags)) {
+      payload.tags = data.tags.slice();
+    }
     if (!payload.schema_v) {
       payload.schema_v = SCHEMA_VERSION;
     }

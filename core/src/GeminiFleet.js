@@ -152,19 +152,28 @@ var GeminiFleet = (function() {
    */
   function clearModelBans() {
     try {
+      let cache = null;
       if (typeof CacheService !== "undefined" && CacheService.getScriptCache) {
-        const cache = CacheService.getScriptCache();
-        if (cache) {
-          DEFAULT_MODEL_LADDER.forEach(function(m) {
-            try { cache.remove("DAILY_EXHAUSTED_" + m); } catch (_) {}
-          });
-        }
+        cache = CacheService.getScriptCache();
       }
+
+      DEFAULT_MODEL_LADDER.forEach(function(m) {
+        if (cache) {
+          try { cache.remove("DAILY_EXHAUSTED_" + m); } catch (_) {}
+        }
+      });
+
       if (typeof PropertiesService !== "undefined" && PropertiesService.getScriptProperties) {
         const props = PropertiesService.getScriptProperties();
         if (props) {
-          DEFAULT_MODEL_LADDER.forEach(function(m) {
-            try { props.deleteProperty("DAILY_EXHAUSTED_" + m); } catch (_) {}
+          const allProps = props.getProperties();
+          Object.keys(allProps).forEach(function(k) {
+            if (k.indexOf("DAILY_EXHAUSTED_") === 0) {
+              if (cache) {
+                try { cache.remove(k); } catch (_) {}
+              }
+              try { props.deleteProperty(k); } catch (_) {}
+            }
           });
         }
       }
@@ -201,10 +210,16 @@ var GeminiFleet = (function() {
       return DEFAULT_MODEL_LADDER;
     }
 
-    const url = "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey;
+    const url = "https://generativelanguage.googleapis.com/v1beta/models";
     try {
       if (typeof UrlFetchApp !== "undefined") {
-        const response = UrlFetchApp.fetch(url, { method: "get", muteHttpExceptions: true });
+        const response = UrlFetchApp.fetch(url, {
+          method: "get",
+          headers: {
+            "x-goog-api-key": apiKey
+          },
+          muteHttpExceptions: true
+        });
         if (response.getResponseCode() === 200) {
           const json = JSON.parse(response.getContentText());
           const rawModels = json.models || [];
@@ -256,7 +271,9 @@ var GeminiFleet = (function() {
    */
   function getDynamicModelLadder(apiKey, configLadder) {
     let candidates = [];
-    if (Array.isArray(configLadder) && configLadder.length > 0 && configLadder !== DEFAULT_MODEL_LADDER) {
+    if (typeof configLadder === "string" && configLadder.trim()) {
+      candidates = [configLadder.trim()];
+    } else if (Array.isArray(configLadder) && configLadder.length > 0 && configLadder !== DEFAULT_MODEL_LADDER) {
       candidates = configLadder;
     } else {
       candidates = discoverAvailableModels(apiKey);
@@ -288,10 +305,13 @@ var GeminiFleet = (function() {
 
     for (let i = 0; i < ladder.length; i++) {
       const model = ladder[i];
-      const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+      const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
       const fetchOptions = {
         method: "post",
         contentType: "application/json",
+        headers: {
+          "x-goog-api-key": apiKey
+        },
         payload: JSON.stringify(payload),
         muteHttpExceptions: true
       };
@@ -334,6 +354,14 @@ var GeminiFleet = (function() {
           if (isDailyQuotaError(code, responseText)) {
             markModelDailyExhausted(model);
           }
+        }
+
+        // 2. Fast-exit on deterministic client errors (bad request, invalid API key, permission denied)
+        if (code === 400 || code === 401 || code === 403) {
+          if (typeof Logger !== "undefined") {
+            Logger.log('[FATAL] Gemini API client error (HTTP ' + code + '): ' + responseText);
+          }
+          return null;
         }
 
         // 3. Persistent error on current model: Rotate
@@ -390,7 +418,7 @@ var GeminiFleet = (function() {
         return parsedData;
       } catch (e) {
         if (typeof Logger !== "undefined") {
-          Logger.log('[ERROR] Exception calling model "' + model + '": " + e.toString()');
+          Logger.log('[ERROR] Exception calling model "' + model + '": ' + e.toString());
         }
       }
     }

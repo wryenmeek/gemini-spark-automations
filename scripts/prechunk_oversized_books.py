@@ -21,15 +21,20 @@ MAX_CHUNK_MB = 14.0
 def get_remote_drive_files(folder_id):
     """Retrieves list of existing filenames in target Drive folder to avoid duplicates."""
     cmd = ["gdrive", "readonly", "ls", folder_id, "--max", "300"]
-    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if res.returncode != 0:
+    try:
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
+        if res.returncode != 0:
+            return set()
+    except subprocess.TimeoutExpired:
+        print(f"  [TIMEOUT] Listing files in folder {folder_id} timed out.", flush=True)
         return set()
+
     files = set()
     lines = res.stdout.strip().split("\n")
     for line in lines[2:]:
         parts = line.split()
         if len(parts) >= 4:
-            fname = " ".join(parts[1:-3])
+            fname = " ".join(parts[1:-3]) if len(parts) > 4 else parts[1]
             files.add(fname)
     return files
 
@@ -38,7 +43,12 @@ def upload_to_drive(local_path, folder_id):
     """Uploads a local chunk PDF to Google Drive."""
     filename = os.path.basename(local_path)
     cmd = ["gdrive", "mutate", "upload", local_path, "--parent", folder_id]
-    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    try:
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print(f"  [TIMEOUT] Upload of {filename} timed out after 120s.")
+        return False
+
     if res.returncode == 0:
         print(f"  [UPLOAD SUCCESS] {filename} -> Drive ({folder_id})")
         return True
@@ -121,7 +131,6 @@ def chunk_flee_mortals(pdf_path, out_dir):
     print(f"\n=== Processing Flee, Mortals!: {pdf_path} ===")
     doc = pymupdf.open(pdf_path)
     toc = doc.get_toc()
-    len(doc)
 
     generated_files = []
 
