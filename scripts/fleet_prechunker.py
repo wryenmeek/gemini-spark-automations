@@ -16,7 +16,10 @@ import subprocess
 import sys
 import time
 
-import pymupdf
+try:
+    import pymupdf
+except ImportError:
+    pymupdf = None
 
 MAX_CHUNK_MB = 13.5  # Safe buffer below Apps Script 15.0 MB limit
 INVENTORY_JSON = "/tmp/3rd_party_archives_inventory.json"
@@ -72,19 +75,23 @@ def save_state(state, state_file=STATE_FILE):
 def get_remote_drive_items(folder_id):
     """Returns dict of {name: {'id': id, 'type': type}} in target Drive folder."""
     cmd = ["gdrive", "readonly", "ls", folder_id, "--max", "500"]
-    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if res.returncode != 0:
+    try:
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
+        if res.returncode != 0:
+            return {}
+        items = {}
+        lines = res.stdout.strip().split("\n")
+        for line in lines[2:]:
+            parts = line.split()
+            if len(parts) >= 4:
+                fid = parts[0]
+                ftype = parts[-3]
+                fname = " ".join(parts[1:-3]) if len(parts) > 4 else parts[1]
+                items[fname] = {"id": fid, "type": ftype}
+        return items
+    except subprocess.TimeoutExpired:
+        print(f"  [TIMEOUT] Remote drive listing timed out for folder: {folder_id}")
         return {}
-    items = {}
-    lines = res.stdout.strip().split("\n")
-    for line in lines[2:]:
-        parts = line.split()
-        if len(parts) >= 4:
-            fid = parts[0]
-            ftype = parts[-3]
-            fname = " ".join(parts[1:-3])
-            items[fname] = {"id": fid, "type": ftype}
-    return items
 
 
 def get_or_create_extracted_folder(parent_id, folder_label, state, state_file=STATE_FILE):
@@ -107,18 +114,21 @@ def get_or_create_extracted_folder(parent_id, folder_label, state, state_file=ST
     # Create Extracted_Chapters folder
     print(f"  [MKDIR] Creating 'Extracted_Chapters' in {folder_label} ({parent_id})...")
     cmd = ["gdrive", "mutate", "mkdir", "Extracted_Chapters", "--parent", parent_id]
-    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if res.returncode == 0:
-        items = get_remote_drive_items(parent_id)
-        if "Extracted_Chapters" in items:
-            folder_id = items["Extracted_Chapters"]["id"]
-            print(f"  [CREATED] Extracted_Chapters folder for {folder_label}: {folder_id}")
-            state["extracted_folders"][parent_id] = folder_id
-            save_state(state, state_file)
-            return folder_id
+    try:
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
+        if res.returncode == 0:
+            items = get_remote_drive_items(parent_id)
+            if "Extracted_Chapters" in items:
+                folder_id = items["Extracted_Chapters"]["id"]
+                print(f"  [CREATED] Extracted_Chapters folder for {folder_label}: {folder_id}")
+                state["extracted_folders"][parent_id] = folder_id
+                save_state(state, state_file)
+                return folder_id
+        print(f"[ERROR] Failed to create Extracted_Chapters in {folder_label}: {res.stderr}")
+    except subprocess.TimeoutExpired:
+        print(f"[ERROR] Timeout creating Extracted_Chapters in {folder_label}")
 
-    print(f"[ERROR] Failed to create Extracted_Chapters in {folder_label}: {res.stderr}")
-    return parent_id
+    return None
 
 
 def get_or_create_extracted_folder_by_publisher(publisher_name, state, state_file=STATE_FILE):
@@ -134,6 +144,9 @@ def get_or_create_extracted_folder_by_publisher(publisher_name, state, state_fil
         return EXISTING_EXTRACTED_FOLDERS["MCDM Archive"]
 
     folder_id = get_or_create_extracted_folder(pub_folder_id, publisher_name, state, state_file)
+    if not folder_id:
+        return None
+
     if "publisher_extracted_folders" not in state:
         state["publisher_extracted_folders"] = {}
     state["publisher_extracted_folders"][publisher_name] = folder_id
@@ -145,12 +158,15 @@ def download_file(file_id, dest_path):
     """Downloads a file from Google Drive."""
     print(f"  [DOWNLOAD] Downloading ID {file_id} to {dest_path}...")
     cmd = ["gdrive", "readonly", "download", file_id, "--out", dest_path]
-    res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if res.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
-        mb = os.path.getsize(dest_path) / (1024 * 1024)
-        print(f"  [DOWNLOAD SUCCESS] {mb:.1f} MB")
-        return True
-    print(f"  [DOWNLOAD FAILED] ID {file_id}: {res.stderr}")
+    try:
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=300)
+        if res.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            mb = os.path.getsize(dest_path) / (1024 * 1024)
+            print(f"  [DOWNLOAD SUCCESS] {mb:.1f} MB")
+            return True
+        print(f"  [DOWNLOAD FAILED] ID {file_id}: {res.stderr}")
+    except subprocess.TimeoutExpired:
+        print(f"  [TIMEOUT] Download timed out for ID {file_id} after 300s")
     return False
 
 
@@ -160,136 +176,157 @@ def save_and_enforce_size(doc, start_idx, end_idx, base_filename, out_dir):
     If the resulting PDF exceeds MAX_CHUNK_MB, recursively bisects into Part 1 & Part 2.
     If a single page exceeds MAX_CHUNK_MB, downsamples/rasterizes at 150 DPI.
     """
+    if pymupdf is None:
+        raise RuntimeError("pymupdf is required for PDF chunking but not installed.")
     chunk_doc = pymupdf.open()
-    chunk_doc.insert_pdf(doc, from_page=start_idx, to_page=end_idx)
+    try:
+        chunk_doc.insert_pdf(doc, from_page=start_idx, to_page=end_idx)
 
-    out_path = os.path.join(out_dir, f"{base_filename}.pdf")
-    chunk_doc.save(out_path, garbage=4, deflate=True, deflate_images=True, deflate_fonts=True)
-    size_mb = os.path.getsize(out_path) / (1024 * 1024)
-    page_count = end_idx - start_idx + 1
+        out_path = os.path.join(out_dir, f"{base_filename}.pdf")
+        chunk_doc.save(out_path, garbage=4, deflate=True, deflate_images=True, deflate_fonts=True)
+        size_mb = os.path.getsize(out_path) / (1024 * 1024)
+        page_count = end_idx - start_idx + 1
 
-    if size_mb <= MAX_CHUNK_MB:
-        print(f"    [CHUNK] {base_filename}.pdf ({page_count} pp, {size_mb:.2f} MB)")
-        return [out_path]
-
-    # If single page exceeds limit, optimize via 150 DPI rasterization
-    if page_count <= 1:
-        print(
-            f"    [OPTIMIZE SINGLE PAGE] Page {start_idx + 1} is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Re-rasterizing at 150 DPI..."
-        )
-        page = doc[start_idx]
-        pix = page.get_pixmap(dpi=150)
-        opt_doc = pymupdf.open()
-        opt_page = opt_doc.new_page(width=page.rect.width, height=page.rect.height)
-        opt_page.insert_image(opt_page.rect, pixmap=pix)
-        opt_doc.save(out_path, garbage=4, deflate=True)
-        opt_mb = os.path.getsize(out_path) / (1024 * 1024)
-        if opt_mb <= MAX_CHUNK_MB:
-            print(f"    [CHUNK OPTIMIZED] {base_filename}.pdf (1 pp, {opt_mb:.2f} MB)")
+        if size_mb <= MAX_CHUNK_MB:
+            print(f"    [CHUNK] {base_filename}.pdf ({page_count} pp, {size_mb:.2f} MB)")
             return [out_path]
-        else:
-            print(
-                f"    [DISCARD OVERSIZED] Even at 150 DPI, {base_filename}.pdf is {opt_mb:.2f} MB. Skipping."
-            )
-            os.remove(out_path)
-            return []
 
-    # Bisect oversized slice
-    os.remove(out_path)
-    mid_idx = start_idx + (page_count // 2) - 1
-    print(
-        f"    [BISECT] {base_filename}.pdf is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Bisecting at page {mid_idx + 1}..."
-    )
-    parts = []
-    parts.extend(save_and_enforce_size(doc, start_idx, mid_idx, f"{base_filename}_Part1", out_dir))
-    parts.extend(
-        save_and_enforce_size(doc, mid_idx + 1, end_idx, f"{base_filename}_Part2", out_dir)
-    )
-    return parts
+        # If single page exceeds limit, optimize via 150 DPI rasterization
+        if page_count <= 1:
+            print(
+                f"    [OPTIMIZE SINGLE PAGE] Page {start_idx + 1} is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Re-rasterizing at 150 DPI..."
+            )
+            page = doc[start_idx]
+            pix = page.get_pixmap(dpi=150)
+            opt_doc = pymupdf.open()
+            try:
+                opt_page = opt_doc.new_page(width=page.rect.width, height=page.rect.height)
+                opt_page.insert_image(opt_page.rect, pixmap=pix)
+                opt_doc.save(out_path, garbage=4, deflate=True)
+                opt_mb = os.path.getsize(out_path) / (1024 * 1024)
+                if opt_mb <= MAX_CHUNK_MB:
+                    print(f"    [CHUNK OPTIMIZED] {base_filename}.pdf (1 pp, {opt_mb:.2f} MB)")
+                    return [out_path]
+                else:
+                    print(
+                        f"    [DISCARD OVERSIZED] Even at 150 DPI, {base_filename}.pdf is {opt_mb:.2f} MB. Skipping."
+                    )
+                    os.remove(out_path)
+                    return []
+            finally:
+                opt_doc.close()
+
+        # Bisect oversized slice
+        os.remove(out_path)
+        mid_idx = start_idx + (page_count // 2) - 1
+        print(
+            f"    [BISECT] {base_filename}.pdf is {size_mb:.2f} MB > {MAX_CHUNK_MB} MB. Bisecting at page {mid_idx + 1}..."
+        )
+        parts = []
+        parts.extend(
+            save_and_enforce_size(doc, start_idx, mid_idx, f"{base_filename}_Part1", out_dir)
+        )
+        parts.extend(
+            save_and_enforce_size(doc, mid_idx + 1, end_idx, f"{base_filename}_Part2", out_dir)
+        )
+        return parts
+    finally:
+        chunk_doc.close()
 
 
 def chunk_pdf_document(pdf_path, out_dir, prefix):
     """
     Intelligently chunks any PDF using Table of Contents or page-budgeting fallback.
     """
+    if pymupdf is None:
+        raise RuntimeError("pymupdf is required for PDF chunking but not installed.")
     doc = pymupdf.open(pdf_path)
-    total_pages = len(doc)
-    total_mb = os.path.getsize(pdf_path) / (1024 * 1024)
-    print(f"  [INSPECT] {os.path.basename(pdf_path)}: {total_pages} pages, {total_mb:.1f} MB")
+    try:
+        total_pages = len(doc)
+        total_mb = os.path.getsize(pdf_path) / (1024 * 1024)
+        print(f"  [INSPECT] {os.path.basename(pdf_path)}: {total_pages} pages, {total_mb:.1f} MB")
 
-    toc = doc.get_toc()
-    generated_files = []
+        toc = doc.get_toc()
+        generated_files = []
 
-    # Filter TOC for level 1 bookmarks
-    l1_entries = [(title.strip(), page) for level, title, page in toc if level == 1 and page > 0]
-
-    # If Level 1 is too coarse (e.g. only 1 or 2 parts), try Level 2
-    if len(l1_entries) <= 2 and len([t for level, t, p in toc if level == 2]) >= 4:
+        # Filter TOC for level 1 bookmarks
         l1_entries = [
-            (title.strip(), page) for level, title, page in toc if level in (1, 2) and page > 0
+            (title.strip(), page) for level, title, page in toc if level == 1 and page > 0
         ]
 
-    # Clean and deduplicate entries by page
-    cleaned_entries = []
-    seen_pages = set()
-    skip_titles = {
-        "credits",
-        "foreword",
-        "table of contents",
-        "contents",
-        "open game license",
-        "legal",
-        "title page",
-    }
-    for title, page in l1_entries:
-        if title.lower() in skip_titles:
-            continue
-        if page not in seen_pages and page <= total_pages:
-            seen_pages.add(page)
-            cleaned_entries.append((title, page))
+        # If Level 1 is too coarse (e.g. only 1 or 2 parts), try Level 2
+        if len(l1_entries) <= 2 and len([t for level, t, p in toc if level == 2]) >= 4:
+            l1_entries = [
+                (title.strip(), page) for level, title, page in toc if level in (1, 2) and page > 0
+            ]
 
-    cleaned_entries.sort(key=lambda x: x[1])
+        # Clean and deduplicate entries by page
+        cleaned_entries = []
+        seen_pages = set()
+        skip_titles = {
+            "credits",
+            "foreword",
+            "table of contents",
+            "contents",
+            "open game license",
+            "legal",
+            "title page",
+        }
+        for title, page in l1_entries:
+            if title.lower() in skip_titles:
+                continue
+            if page not in seen_pages and page <= total_pages:
+                seen_pages.add(page)
+                cleaned_entries.append((title, page))
 
-    if len(cleaned_entries) >= 3:
-        # TOC-based chunking
-        print(f"  [STRATEGY] Using TOC Bookmarks ({len(cleaned_entries)} sections found)")
-        # If first bookmark starts > page 1, save intro/front matter
-        if cleaned_entries[0][1] > 1:
-            intro_end = cleaned_entries[0][1] - 2
-            if intro_end >= 0:
-                files = save_and_enforce_size(
-                    doc, 0, intro_end, f"{prefix}_00_FrontMatter", out_dir
+        cleaned_entries.sort(key=lambda x: x[1])
+
+        if len(cleaned_entries) >= 3:
+            # TOC-based chunking
+            print(f"  [STRATEGY] Using TOC Bookmarks ({len(cleaned_entries)} sections found)")
+            # If first bookmark starts > page 1, save intro/front matter
+            if cleaned_entries[0][1] > 1:
+                intro_end = cleaned_entries[0][1] - 2
+                if intro_end >= 0:
+                    files = save_and_enforce_size(
+                        doc, 0, intro_end, f"{prefix}_00_FrontMatter", out_dir
+                    )
+                    generated_files.extend(files)
+
+            for i in range(len(cleaned_entries)):
+                title, start_page = cleaned_entries[i]
+                start_idx = start_page - 1
+                end_idx = (
+                    (cleaned_entries[i + 1][1] - 2)
+                    if i + 1 < len(cleaned_entries)
+                    else total_pages - 1
                 )
+                end_idx = max(end_idx, start_idx)
+                safe_title = re.sub(r"[^a-zA-Z0-9_-]", "_", title)[:40].strip("_")
+                base_name = f"{prefix}_{i + 1:02d}_{safe_title}"
+                files = save_and_enforce_size(doc, start_idx, end_idx, base_name, out_dir)
                 generated_files.extend(files)
-
-        for i in range(len(cleaned_entries)):
-            title, start_page = cleaned_entries[i]
-            start_idx = start_page - 1
-            end_idx = (
-                (cleaned_entries[i + 1][1] - 2) if i + 1 < len(cleaned_entries) else total_pages - 1
+        else:
+            # Fallback: Page-budgeted slicing
+            print("  [STRATEGY] No detailed TOC found. Using page-budgeting fallback.")
+            avg_mb_per_page = total_mb / max(1, total_pages)
+            # Aim for ~8MB chunks
+            pages_per_chunk = max(4, int(8.0 / max(0.01, avg_mb_per_page)))
+            print(
+                f"  [PAGE BUDGET] ~{pages_per_chunk} pages per chunk ({avg_mb_per_page:.2f} MB/page)"
             )
-            end_idx = max(end_idx, start_idx)
-            safe_title = re.sub(r"[^a-zA-Z0-9_-]", "_", title)[:40].strip("_")
-            base_name = f"{prefix}_{i + 1:02d}_{safe_title}"
-            files = save_and_enforce_size(doc, start_idx, end_idx, base_name, out_dir)
-            generated_files.extend(files)
-    else:
-        # Fallback: Page-budgeted slicing
-        print("  [STRATEGY] No detailed TOC found. Using page-budgeting fallback.")
-        avg_mb_per_page = total_mb / max(1, total_pages)
-        # Aim for ~8MB chunks
-        pages_per_chunk = max(4, int(8.0 / max(0.01, avg_mb_per_page)))
-        print(f"  [PAGE BUDGET] ~{pages_per_chunk} pages per chunk ({avg_mb_per_page:.2f} MB/page)")
 
-        chunk_idx = 1
-        for start_idx in range(0, total_pages, pages_per_chunk):
-            end_idx = min(start_idx + pages_per_chunk - 1, total_pages - 1)
-            base_name = f"{prefix}_Part{chunk_idx:02d}_p{start_idx + 1:04d}_p{end_idx + 1:04d}"
-            files = save_and_enforce_size(doc, start_idx, end_idx, base_name, out_dir)
-            generated_files.extend(files)
-            chunk_idx += 1
+            chunk_idx = 1
+            for start_idx in range(0, total_pages, pages_per_chunk):
+                end_idx = min(start_idx + pages_per_chunk - 1, total_pages - 1)
+                base_name = f"{prefix}_Part{chunk_idx:02d}_p{start_idx + 1:04d}_p{end_idx + 1:04d}"
+                files = save_and_enforce_size(doc, start_idx, end_idx, base_name, out_dir)
+                generated_files.extend(files)
+                chunk_idx += 1
 
-    return generated_files
+        return generated_files
+    finally:
+        doc.close()
 
 
 def upload_chunks(chunk_files, remote_folder_id):
@@ -317,24 +354,28 @@ def upload_chunks(chunk_files, remote_folder_id):
         # Retry with exponential backoff on RATE_LIMIT_EXCEEDED
         for attempt in range(4):
             cmd = ["gdrive", "mutate", "upload", f, "--parent", remote_folder_id]
-            res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-            if res.returncode == 0:
-                print(f"    [UPLOAD SUCCESS] {fname} ({fsize_mb:.2f} MB)")
-                uploaded_count += 1
-                break
-            elif "RATE_LIMIT_EXCEEDED" in res.stderr or "Quota exceeded" in res.stderr:
-                wait_sec = (2**attempt) * 4 + random.uniform(1.0, 3.0)
-                print(
-                    f"    [RATE LIMIT] Drive 403 hit. Backing off for {wait_sec:.1f}s before retry (attempt {attempt + 1}/4)..."
-                )
-                time.sleep(wait_sec)
-            else:
-                print(f"    [UPLOAD ERROR] {fname}: {res.stderr.strip()[:100]}")
+            try:
+                res = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=300)
+                if res.returncode == 0:
+                    print(f"    [UPLOAD SUCCESS] {fname} ({fsize_mb:.2f} MB)")
+                    uploaded_count += 1
+                    break
+                elif "RATE_LIMIT_EXCEEDED" in res.stderr or "Quota exceeded" in res.stderr:
+                    wait_sec = (2**attempt) * 4 + random.uniform(1.0, 3.0)
+                    print(
+                        f"    [RATE LIMIT] Drive 403 hit. Backing off for {wait_sec:.1f}s before retry (attempt {attempt + 1}/4)..."
+                    )
+                    time.sleep(wait_sec)
+                else:
+                    print(f"    [UPLOAD ERROR] {fname}: {res.stderr.strip()[:100]}")
+                    break
+            except subprocess.TimeoutExpired:
+                print(f"    [TIMEOUT] Upload timed out for {fname} after 300s")
                 break
     return uploaded_count
 
 
-def process_single_file(item, state, state_file=STATE_FILE, upload=True, skip_keywords=False):
+def process_single_file(item, state, state_file=STATE_FILE, upload=True, skip_keywords=False):  # noqa: PLR0911
     file_id = item["id"]
     file_name = item["name"]
     file_path = item.get("path", file_name)
@@ -368,18 +409,24 @@ def process_single_file(item, state, state_file=STATE_FILE, upload=True, skip_ke
             return True
 
     # Setup local workspace
-    book_work_dir = os.path.join(TEMP_WORK_DIR, file_id)
+    book_work_dir = os.path.abspath(os.path.join(TEMP_WORK_DIR, file_id))
     os.makedirs(book_work_dir, exist_ok=True)
 
-    # Look for local download in /Users/wryen/Downloads/
+    # Sanitize file_name to prevent directory traversal
+    safe_basename = os.path.basename(file_name)
+
+    # Look for local download in ~/Downloads/
     local_pdf = None
-    downloads_path = os.path.join("/Users/wryen/Downloads", file_name)
+    downloads_path = os.path.join(os.path.expanduser("~/Downloads"), safe_basename)
     if os.path.exists(downloads_path):
         print(f"  [LOCAL DISCOVERY] Found existing copy in Downloads: {downloads_path}")
         local_pdf = downloads_path
     else:
         # Download from Google Drive
-        dest_pdf = os.path.join(book_work_dir, file_name)
+        dest_pdf = os.path.abspath(os.path.join(book_work_dir, safe_basename))
+        if not dest_pdf.startswith(book_work_dir):
+            print(f"  [SECURITY] Detected path traversal attempt in filename: {file_name}")
+            return False
         if download_file(file_id, dest_pdf):
             local_pdf = dest_pdf
 
@@ -388,7 +435,7 @@ def process_single_file(item, state, state_file=STATE_FILE, upload=True, skip_ke
         return False
 
     # Generate Prefix
-    safe_name = re.sub(r"[^a-zA-Z0-9]", "_", os.path.splitext(file_name)[0])
+    safe_name = re.sub(r"[^a-zA-Z0-9]", "_", os.path.splitext(safe_basename)[0])
     prefix = safe_name[:25].strip("_")
 
     # Chunk PDF
@@ -407,11 +454,30 @@ def process_single_file(item, state, state_file=STATE_FILE, upload=True, skip_ke
             remote_folder_id = get_or_create_extracted_folder_by_publisher(
                 publisher, state, state_file
             )
+        if not remote_folder_id:
+            print("  [FAIL CLOSED] Target Extracted_Chapters folder missing. Aborting upload.")
+            return False
         print(f"  [UPLOAD TARGET] Folder: {remote_folder_id}")
         uploaded = upload_chunks(chunks, remote_folder_id)
         print(f"  [UPLOAD RESULT] {uploaded}/{len(chunks)} chunks verified in Drive.")
 
-    # Mark as processed in state
+        if uploaded < len(chunks):
+            print(
+                f"  [PARTIAL FAILURE] Only {uploaded}/{len(chunks)} chunks uploaded successfully."
+            )
+            state["processed_ids"][file_id] = {
+                "status": "partial_failure",
+                "file_name": file_name,
+                "publisher": publisher,
+                "parent_path": parent_path,
+                "size_mb": size_mb,
+                "chunk_count": len(chunks),
+                "uploaded_count": uploaded,
+            }
+            save_state(state, state_file)
+            return False
+
+    # Mark as completed in state
     state["processed_ids"][file_id] = {
         "status": "completed",
         "file_name": file_name,

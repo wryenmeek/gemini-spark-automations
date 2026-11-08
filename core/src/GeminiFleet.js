@@ -25,27 +25,16 @@ var GeminiFleet = (function() {
     "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
   ];
 
-  const PRIORITY_MAP = {
-    "gemini-2.5-flash": 10,
-    "gemini-2.5-flash-lite": 15,
-    "gemini-flash-latest": 20,
-    "gemini-flash-lite-latest": 25,
-    "gemini-3.5-flash": 30,
-    "gemini-3.5-flash-lite": 35,
-    "gemini-3.1-flash-lite": 40,
-    "gemini-3.1-flash-lite-preview": 45,
-    "gemini-3-flash-preview": 50,
-    "gemini-3.6-flash": 55,
-    "gemini-3.7-flash": 60,
-    "gemini-3.8-flash": 65,
-    "gemini-omni-flash-preview": 70,
-    "gemini-omni-1.1-flash": 75,
-    "gemini-2.5-pro": 100,
-    "gemini-pro-latest": 105,
-    "gemini-3.1-pro-preview": 110,
-    "gemini-3.1-pro-preview-customtools": 115,
-    "gemini-4-argon": 120
-  };
+  function getModelPriority(modelName) {
+    const clean = String(modelName || "").replace(/^models\//, "");
+    const idx = DEFAULT_MODEL_LADDER.indexOf(clean);
+    return idx !== -1 ? (idx + 1) * 10 : 999;
+  }
+
+  const PRIORITY_MAP = {};
+  DEFAULT_MODEL_LADDER.forEach(function(m, i) {
+    PRIORITY_MAP[m] = (i + 1) * 10;
+  });
 
   const EXCLUDED_KEYWORDS = [
     "tts", "image", "lyria", "transcribe", "robotics",
@@ -236,9 +225,7 @@ var GeminiFleet = (function() {
               return !EXCLUDED_KEYWORDS.some(function(keyword) { return lower.includes(keyword); });
             })
             .sort(function(a, b) {
-              const rankA = PRIORITY_MAP[a] || 200;
-              const rankB = PRIORITY_MAP[b] || 200;
-              return rankA - rankB;
+              return getModelPriority(a) - getModelPriority(b);
             });
 
           if (discovered.length > 0) {
@@ -272,9 +259,11 @@ var GeminiFleet = (function() {
   function getDynamicModelLadder(apiKey, configLadder) {
     let candidates = [];
     if (typeof configLadder === "string" && configLadder.trim()) {
-      candidates = [configLadder.trim()];
+      candidates = [configLadder.trim().replace(/^models\//, "")];
     } else if (Array.isArray(configLadder) && configLadder.length > 0 && configLadder !== DEFAULT_MODEL_LADDER) {
-      candidates = configLadder;
+      candidates = configLadder.map(function(m) {
+        return String(m || "").trim().replace(/^models\//, "");
+      }).filter(Boolean);
     } else {
       candidates = discoverAvailableModels(apiKey);
     }
@@ -304,7 +293,15 @@ var GeminiFleet = (function() {
     }
 
     for (let i = 0; i < ladder.length; i++) {
-      const model = ladder[i];
+      if (typeof options.isTimeExpiring === "function" && options.isTimeExpiring()) {
+        if (typeof Logger !== "undefined") {
+          Logger.log("[HALT] Execution time budget expiring. Aborting model ladder iteration.");
+        }
+        return null;
+      }
+
+      const rawModel = ladder[i];
+      const model = String(rawModel || "").replace(/^models\//, "");
       const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
       const fetchOptions = {
         method: "post",
@@ -388,7 +385,22 @@ var GeminiFleet = (function() {
         }
 
         const json = JSON.parse(responseText);
-        const candidateText = json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] ? json.candidates[0].content.parts[0].text : null;
+
+        // Fast-exit on safety, recitation, or blocklist blocks
+        const candidate = json.candidates && json.candidates[0];
+        const finishReason = candidate && candidate.finishReason;
+        const promptFeedback = json.promptFeedback;
+        const blockReason = (promptFeedback && promptFeedback.blockReason) ||
+          (finishReason === "SAFETY" || finishReason === "RECITATION" || finishReason === "BLOCKLIST" ? finishReason : null);
+
+        if (blockReason) {
+          if (typeof Logger !== "undefined") {
+            Logger.log('[BLOCKED] Content generation blocked by safety policy (' + blockReason + '). Aborting rotation.');
+          }
+          return { error: "BLOCKED_BY_SAFETY", reason: blockReason, _modelUsed: model };
+        }
+
+        const candidateText = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] ? candidate.content.parts[0].text : null;
         if (!candidateText) {
           if (typeof Logger !== "undefined") {
             Logger.log('[WARN] Model "' + model + '" returned no candidate text.');
@@ -398,12 +410,11 @@ var GeminiFleet = (function() {
 
         let parsedData = null;
         try {
-          // If candidateText contains markdown code blocks, strip them
+          // If candidateText contains markdown code blocks, strip them (even with conversational prelude/coda)
           let cleanJsonText = candidateText.trim();
-          if (cleanJsonText.startsWith("```json")) {
-            cleanJsonText = cleanJsonText.replace(/^```json\s*/, "").replace(/\s*```$/, "");
-          } else if (cleanJsonText.startsWith("```")) {
-            cleanJsonText = cleanJsonText.replace(/^```\s*/, "").replace(/\s*```$/, "");
+          const codeBlockMatch = cleanJsonText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+          if (codeBlockMatch) {
+            cleanJsonText = codeBlockMatch[1].trim();
           }
           parsedData = JSON.parse(cleanJsonText);
         } catch (_) {

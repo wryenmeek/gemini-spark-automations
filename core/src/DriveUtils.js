@@ -189,8 +189,12 @@ var DriveUtils = (function() {
       text = "[Text extraction failed: " + e.toString() + "]";
     }
 
-    const words = text.split(/\s+/).filter(Boolean);
-    if (words.length > wordLimit) {
+    // Heap-safe word splitting: pre-slice sample window to avoid V8 heap OOM on large docs
+    const sampleWindowLimit = Math.max(1000, (wordLimit || 100) * 30);
+    const sampleWindow = text.length > sampleWindowLimit ? text.substring(0, sampleWindowLimit) : text;
+    const words = sampleWindow.split(/\s+/).filter(Boolean);
+
+    if (words.length > wordLimit || text.length > sampleWindowLimit) {
       return words.slice(0, wordLimit).join(" ") + "\n... [TRUNCATED at " + wordLimit + " words]";
     }
     return text;

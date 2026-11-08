@@ -101,6 +101,8 @@ def main():
             else:
                 file_count += 1
                 it["path"] = item_path
+                it["parent_id"] = curr_id
+                it["parent_path"] = curr_path
                 all_files.append(it)
 
                 # Check for PDF

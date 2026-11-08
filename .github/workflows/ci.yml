@@ -125,12 +125,7 @@ jobs:
         run: ruff format --check .
 
       - name: Run Python unit tests
-        run: |
-          if [ -d "tests/python" ]; then
-            pytest -v
-          else
-            echo "No tests/python directory yet. Skipping pytest."
-          fi
+        run: pytest -v tests/python
 
       - name: Verify Offline Wheel Bridge Integrity
         run: |

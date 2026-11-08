@@ -20,7 +20,7 @@ var DriveMetadata = (function() {
     }
 
     const trimmed = description.trim();
-    if (!trimmed.includes('"schema_v"') && !trimmed.startsWith("{")) {
+    if (!trimmed.includes('"schema_v"')) {
       return null;
     }
 
@@ -31,7 +31,7 @@ var DriveMetadata = (function() {
       if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
         const jsonStr = trimmed.substring(firstBrace, lastBrace + 1);
         const parsed = JSON.parse(jsonStr);
-        if (typeof parsed === "object" && parsed !== null) {
+        if (typeof parsed === "object" && parsed !== null && parsed.schema_v === SCHEMA_VERSION) {
           return parsed;
         }
       }
@@ -66,9 +66,9 @@ var DriveMetadata = (function() {
 
     let jsonStr = JSON.stringify(payload);
     if (jsonStr.length > MAX_DESCRIPTION_LENGTH) {
-      // If payload exceeds 1024 chars, trim tags array to fit
-      if (Array.isArray(payload.tags) && payload.tags.length > 1) {
-        while (payload.tags.length > 1 && jsonStr.length > MAX_DESCRIPTION_LENGTH) {
+      // If payload exceeds 1024 chars, trim tags array to fit (down to 0 tags if needed)
+      if (Array.isArray(payload.tags) && payload.tags.length > 0) {
+        while (payload.tags.length > 0 && jsonStr.length > MAX_DESCRIPTION_LENGTH) {
           payload.tags.pop();
           jsonStr = JSON.stringify(payload);
         }

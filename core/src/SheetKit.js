@@ -37,7 +37,19 @@ var SheetKit = (function() {
       return str.substring(0, 4);
     }
 
-    // 2. Match Excel serial date between 40000 and 55000 (e.g., '46241.0' -> 2026-08-07)
+    // 2. Match ISO date string (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss...)
+    const isoMatch = str.match(/^((?:19|20)\d{2})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (isoMatch) {
+      if (!fullDate) {
+        return isoMatch[1];
+      }
+      const yyyy = isoMatch[1];
+      const mm = isoMatch[2].length === 1 ? "0" + isoMatch[2] : isoMatch[2];
+      const dd = isoMatch[3].length === 1 ? "0" + isoMatch[3] : isoMatch[3];
+      return yyyy + "-" + mm + "-" + dd;
+    }
+
+    // 3. Match Excel serial date between 40000 and 55000 (e.g., '46241.0' -> 2026-08-07)
     if (/^\d{5}(\.\d+)?$/.test(str)) {
       const serial = parseFloat(str);
       if (serial >= 40000 && serial <= 55000) {
@@ -164,6 +176,20 @@ var SheetKit = (function() {
   }
 
   /**
+   * Sanitizes potential formula injection characters (=, +, -, @, \t, \r)
+   * to protect against CSV / formula injection vulnerabilities.
+   */
+  function sanitizeCellValue(val) {
+    if (typeof val === "string" && val.length > 0) {
+      const firstChar = val.charAt(0);
+      if (firstChar === "=" || firstChar === "+" || firstChar === "-" || firstChar === "@" || firstChar === "\t" || firstChar === "\r") {
+        return "'" + val;
+      }
+    }
+    return val;
+  }
+
+  /**
    * Appends an array of rows to a sheet in chunks to prevent network timeouts and cell boundary errors.
    *
    * @param {Sheet} sheet - SpreadsheetApp Sheet object
@@ -185,19 +211,34 @@ var SheetKit = (function() {
       }
     }
 
+    const maxColsNeeded = rows.reduce(function(acc, r) {
+      return Math.max(acc, Array.isArray(r) ? r.length : 0);
+    }, 0);
+
+    if (maxColsNeeded > 0 && typeof sheet.getMaxColumns === "function" && typeof sheet.insertColumnsAfter === "function") {
+      const currentMaxCols = sheet.getMaxColumns();
+      if (maxColsNeeded > currentMaxCols) {
+        sheet.insertColumnsAfter(currentMaxCols, maxColsNeeded - currentMaxCols);
+      }
+    }
+
     let appendedCount = 0;
     for (let i = 0; i < rows.length; i += chunkSize) {
       const chunk = rows.slice(i, i + chunkSize);
       const numCols = chunk[0].length;
-      sheet.getRange(currentRow, 1, chunk.length, numCols).setValues(chunk);
-      currentRow += chunk.length;
-      appendedCount += chunk.length;
+      const sanitizedChunk = chunk.map(function(row) {
+        return row.map(sanitizeCellValue);
+      });
+      sheet.getRange(currentRow, 1, sanitizedChunk.length, numCols).setValues(sanitizedChunk);
+      currentRow += sanitizedChunk.length;
+      appendedCount += sanitizedChunk.length;
     }
 
     return appendedCount;
   }
 
   return {
+    sanitizeCellValue: sanitizeCellValue,
     normalizeYearOrDateCell: normalizeYearOrDateCell,
     normalizeYear: normalizeYear,
     normalizeDate: normalizeDate,

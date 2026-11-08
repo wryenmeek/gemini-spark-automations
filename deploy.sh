@@ -84,14 +84,10 @@ deploy_bound_project \
   "Drive-Tagging-Automation" \
   "1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA"
 
-echo ""
-echo "------------------------------------------------------------"
-echo "Deploying: MCDM Archive Knowledge Graph Ingestion"
-echo "Directory: projects/knowledge-graph-ingestion"
-echo "------------------------------------------------------------"
-cd "$ROOT_DIR/projects/knowledge-graph-ingestion"
-"$CLASP" push --force
-echo "[SUCCESS] Pushed MCDM Archive Knowledge Graph Ingestion to Apps Script!"
+deploy_bound_project \
+  "knowledge-graph-ingestion" \
+  "MCDM-Archive-Knowledge-Graph-Ingestion" \
+  ""
 
 echo ""
 echo "============================================================"
