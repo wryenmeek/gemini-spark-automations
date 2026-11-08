@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "deploy": "./deploy.sh"
   },
   "devDependencies": {

@@ -1,0 +1,32 @@
+[project]
+name = "gemini-spark-automations"
+version = "1.0.0"
+description = "Google Workspace automations, SparkCore Apps Script shared library, and offline Gemini Spark wheel bridge"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C4",  # flake8-comprehensions
+    "PL",  # pylint
+]
+ignore = [
+    "E501",    # Line length (handled by ruff format)
+    "PLR0912", # Too many branches
+    "PLR0915", # Too many statements
+    "PLR2004", # Magic value used in comparison
+    "PLC0415", # Local imports inside functions
+]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests/python"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v --tb=short"
