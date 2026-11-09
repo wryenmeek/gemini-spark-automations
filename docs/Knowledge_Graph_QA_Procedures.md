@@ -66,3 +66,18 @@ This document specifies the Quality Assurance (QA), validation checks, and opera
 - [ ] **Clasp Configuration**: Ensure `projects/knowledge-graph-ingestion/.clasp.json` points to script ID `1WLRQ7rZnz-LmtKmssiCyjrm8vL2ikG-KdPjTfiSI28TuB6F2XdP21kFZ`.
 - [ ] **Automated Test Suite**: Run `bun test` in `gemini-spark-automations`. All unit tests (including `describe("4. Semantic Knowledge Graph Ingestion")`) must pass with 0 failures before deployment.
 - [ ] **Push Verification**: Execute `deploy.sh` to push all 4 projects to Google Apps Script.
+
+---
+
+## 6. Pre-Chunking & Oversized Asset Ingestion QA (`scripts/fleet_prechunker.py`)
+
+### Validation Checklist
+- [ ] **Pre-Flight Inventory Scan**: Run crawler (`scripts/scan_3rd_party_archives.py` or `scripts/scan_suppliments.py`) to catalog all PDFs and flag all oversized files ($\ge 14.0$ MB).
+- [ ] **Oversized Threshold Compliance**: Confirm that no file $\ge 14.0$ MB is passed directly to Apps Script's `UrlFetchApp` or `DriveApp` in order to prevent V8 15 MB heap crashes.
+- [ ] **TOC Bookmark Hierarchy**: Verify `scripts/fleet_prechunker.py` extracts Level 1 and Level 2 bookmarks to slice rulebooks into logical, semantic chapters.
+- [ ] **Page-Budgeting Fallback**: For unindexed/scanned rulebooks, verify that adaptive page-budgeting slices the PDF into ~8 MB sub-PDFs.
+- [ ] **Recursive Binary Bisection**: Ensure any chapter slice $> 13.5$ MB is automatically bisected into Part 1 and Part 2.
+- [ ] **150 DPI Rasterization Optimization**: Verify that uncompressed full-page foldouts/maps exceeding 13.5 MB are rasterized at 150 DPI to fit safely under the ceiling.
+- [ ] **Target Directory Routing**: Verify that each generated chunk is uploaded into an `Extracted_Chapters` folder inside the source book's parent directory.
+- [ ] **Quota Pacing & Backoff**: Ensure upload runs enforce 1.2s delay and handle `RATE_LIMIT_EXCEEDED` (HTTP 403) via exponential backoff.
+- [ ] **Drive Ingestion Verification**: Verify that Apps Script's knowledge graph crawler only ingests sub-PDFs from `Extracted_Chapters` or original PDFs $< 14.0$ MB.

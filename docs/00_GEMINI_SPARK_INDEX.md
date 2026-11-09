@@ -2,7 +2,7 @@
 
 **Directory Location:** Google Drive / [`gemini-spark`](https://drive.google.com/drive/folders/1XQyRsEx8gQl8idUv_UhfRMYxS9dIx0tk) (`1XQyRsEx8gQl8idUv_UhfRMYxS9dIx0tk`)
 **Maintained By:** Wryen Meek & Gemini (Antigravity)
-**Last Verified & Audited:** November 7, 2026
+**Last Verified & Audited:** November 9, 2026
 **Status:** **100% Current, Canonical & Verified**
 
 ---
@@ -65,6 +65,14 @@ flowchart TD
         P5_Seeds["assets/seeds/<br><i>OpenCypher Seeds for ArcadeDB</i>"]
         P5_QA --> P5_Code --> P5_Seeds
     end
+
+    subgraph P6["7. Offline Companion & Pre-Chunking Fleet"]
+        P6_Chunker["fleet_prechunker.py<br><i>TOC & Bisection Slicer (<13.5MB)</i>"]
+        P6_Scan3["scan_3rd_party_archives.py<br><i>689 Folders / 79 Oversized Books</i>"]
+        P6_ScanS["scan_suppliments.py<br><i>24 Folders / 40 Oversized Books</i>"]
+        P6_Scan3 & P6_ScanS --> P6_Chunker
+        P6_Chunker -. "Extracted_Chapters" .-> P5_Code
+    end
 ```
 
 ---
@@ -93,6 +101,9 @@ flowchart TD
 | **6. Knowledge Graph** | [`Knowledge_Graph_Automation_Code.gs.md`](https://drive.google.com/file/d/1GXWpPDTaoj5MyWjZjstAhsMBU8JgmEmt/view) | Markdown | `1GXWpPDTaoj5MyWjZjstAhsMBU8JgmEmt` | BFS folder crawler, 18-model discovery ladder, idempotent OpenCypher generator. |
 | **6. Knowledge Graph** | [`Knowledge_Graph_QA_Procedures.md`](https://drive.google.com/file/d/10lj16vFN6ryN0UUDe62H0AgCXgbYCp6G/view) | Markdown | `10lj16vFN6ryN0UUDe62H0AgCXgbYCp6G` | QA checklists for graph entity vertices, relationships, and ArcadeDB seeds. |
 | **7. Offline Companion** | [`spark-wheels/`](../spark-wheels/) | Wheel Depot | Repository Directory | Offline Python wheel depot and airgapped distribution runbooks. |
+| **8. Pre-Chunking Fleet** | [`scripts/fleet_prechunker.py`](../scripts/fleet_prechunker.py) | Python CLI Engine | Repository Script | TOC bookmark slicing, adaptive page budgeting, 150 DPI raster optimization, and dynamic `Extracted_Chapters` Drive routing. |
+| **8. Pre-Chunking Fleet** | [`scripts/scan_3rd_party_archives.py`](../scripts/scan_3rd_party_archives.py) | Python CLI Crawler | Repository Script | Recursive BFS crawler for 3rd Party Archives (`13Ovbl0JQZ3EGXDBY7UDFeSP6gd8_sHTC`). |
+| **8. Pre-Chunking Fleet** | [`scripts/scan_suppliments.py`](../scripts/scan_suppliments.py) | Python CLI Crawler | Repository Script | Recursive BFS crawler for Suppliments hierarchy (`1RgAo-hdJ8qIERzyaa1xfvH9DZyhffsO9`). |
 
 ---
 

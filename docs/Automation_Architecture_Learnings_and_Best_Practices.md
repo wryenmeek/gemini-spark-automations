@@ -68,6 +68,14 @@ flowchart TD
   2. Skip any file already present in the queue.
   3. Enforce spreadsheet data validation dropdowns (`ONE_OF_LIST`: `Pending`, `Approved`, `Approved with Corrections`, `Rejected`) on the action column to provide a clean, human-in-the-loop audit interface.
 
+### D. The Pre-Chunking Architecture (Overcoming the 15 MB V8 Heap Ceiling)
+* **The Constraint:** Google Apps Script enforces a strict 15.0 MB V8 heap limit. Processing high-resolution sourcebooks (30 MB to 250 MB) in cloud script environments is impossible and results in immediate, fatal `Exceeded memory limit` crashes.
+* **The Solution:** A dedicated offline Python pre-chunking companion tier (`scripts/fleet_prechunker.py`) that operates directly against Google Drive hierarchies:
+  1. **Dual Slicing Hierarchy:** Extracts Level 1 and Level 2 Table of Contents (TOC) bookmarks into modular chapter sub-PDFs. For flat/unindexed PDFs, falls back to dynamic page-budgeting targeting ~8 MB per chunk.
+  2. **Recursive Binary Bisection:** Any generated chapter exceeding 13.5 MB is automatically bisected into Part 1 and Part 2.
+  3. **150 DPI Single-Page Raster Fallback:** Intercepts high-DPI uncompressed bitmap foldouts and maps (>13.5 MB single page) and re-encodes them via PyMuPDF image insertion at 150 DPI, compressing 22 MB foldouts down to 1.5–4.0 MB.
+  4. **Dynamic Drive Hierarchy Routing:** Discovers or creates a dedicated `Extracted_Chapters` subfolder in each source folder and uploads the generated sub-PDFs with 1.2s courteous delay and exponential backoff retry for quota safety.
+
 ---
 
 ## 3. Google Workspace Runtime Traps & Concrete Fixes
@@ -81,7 +89,7 @@ flowchart TD
 | **Global Row Counting for Dynamic Exclusions** | Counting total rows in a rejection log (e.g. 800+ rows) causes the script to exclude *every* folder immediately. | Tag rejections with `[FolderID:<id>]` and count only matching markers per folder (`count >= 3`), guarding `root`. |
 | **Single Ingestion Row Schema for Multi-Year Sheets** | Corrupts data by writing expense columns into reconciliation audit columns when sheets diverge. | Inspect the target sheet ID or column count dynamically to select the appropriate column mapping schema. |
 | **Unbounded Loop Execution (`Timed out` after 360s)** | Time triggers running past Google's hard 6-minute execution cutoff are abruptly terminated by the platform. | Enforce `BATCH_SIZE` (5–10 items) and a 4-minute runtime budget (`Date.now() - startTime > 240,000`), exiting cleanly. |
-| **Oversized PDF Heap Blowup (`Failed` / Out of Memory)** | Calling `getBlob().getBytes()` on 40–100 MB PDFs crashes the 128 MB Apps Script V8 heap and exceeds `UrlFetchApp` limits. | Check `file.getSize()` first; skip/flag PDFs > 15 MB (`EXCEEDS_INLINE_PDF_LIMIT`) and route them to local Python processing. |
+| **Oversized PDF Heap Blowup (`Failed` / Out of Memory)** | Calling `getBlob().getBytes()` on 40–100 MB PDFs crashes the 128 MB Apps Script V8 heap and exceeds `UrlFetchApp` limits. | Enforce `file.getSize() < 14 MB` in Apps Script. Pre-process all oversized books with `scripts/fleet_prechunker.py`, which slices them into `< 13.5 MB` chapters with 150 DPI rasterization and uploads them to `Extracted_Chapters` subfolders for seamless ingestion. |
 | **HTTP 429 Quota Exhaustion (`RESOURCE_EXHAUSTED`)** | Narrow model regexes or hardcoded ladders fail silently when deprecated models throw 404, artificially restricting failover to 1–2 models. | Implement **Dynamic Full-Fleet Discovery & Daily Quota State Tracking**: query `GET /v1beta/models`, filter out single-modality endpoints (`tts`, `image`, `lyria`), prioritize high-throughput Flash tiers (`2.5-flash`, `2.5-flash-lite`, `flash-latest`, `3.5-flash`, `3.1-flash-lite`, etc.) followed by Pro tiers (`2.5-pro`, `pro-latest`, `gemini-4-argon`), ban daily-exhausted models (RPD) until UTC midnight via `CacheService` + `ScriptProperties`, and rotate across 18+ independent quota buckets. |
 | **Flat Folder Enumeration (`Folder.getFiles()`)** | Fails to discover documents nested in subdirectories (e.g., issue folders, playtest packets, media archives). | Implement **Recursive Breadth-First Traversal (BFS)** with a visited folder ID `Set`, discovering child folders via `Folder.getFolders()` while strictly enforcing batch limits and execution time budgets across iterations. |
 

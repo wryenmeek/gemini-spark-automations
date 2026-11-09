@@ -21,10 +21,16 @@ This repository contains the production source code, unit tests, clasp bindings,
 │   ├── writing-style-index/                  # Tone & prose analysis, rejection learning, monthly taxonomy clustering
 │   ├── drive-tagging/                        # Direct-to-storage Schema v1 JSONL drive classifier & tagger
 │   └── knowledge-graph-ingestion/            # Cypher seed generator & multimodal document extractor
+├── scripts/                                  # Offline Companion CLI Tools & Pre-Chunking Fleet
+│   ├── fleet_prechunker.py                   # Automated TOC & page-budgeted PDF pre-chunker (< 13.5 MB)
+│   ├── scan_3rd_party_archives.py            # Recursive BFS metadata crawler for 3rd Party Archives
+│   ├── scan_suppliments.py                   # Recursive BFS metadata crawler for Suppliments hierarchy
+│   └── prechunk_oversized_books.py           # Legacy rulebook prechunker engine
+├── spark-wheels/                             # Airgapped Python Wheel Depot & Offline Runner
 ├── docs/                                     # Engineering Specifications, SOPs & Governance Rubrics
 │   └── IMPLEMENTATION_PLAN.md                # System Architecture, Subsystem Requirements & CI Design
 ├── test/
-│   ├── core.test.ts                          # Comprehensive SparkCore unit tests (59 tests)
+│   ├── core.test.ts                          # Comprehensive SparkCore unit tests (42 tests)
 │   └── apps_script.test.ts                   # Production pipeline regression tests (23 tests)
 ├── tests/
 │   └── python/                               # Python parser & prechunker unit tests (11 tests)
@@ -70,11 +76,41 @@ This repository contains the production source code, unit tests, clasp bindings,
 - **Execution Budget Supervisor:** Tracks elapsed script time against Google's 6-minute cutoff (default budget: 240,000 ms), cleanly yielding execution before abrupt termination.
 - **Structured Error Dispatching:** Formats error reports and dispatches alert emails via `MailApp` / `GmailApp`.
 
+## Offline Companion Tier: Fleet Pre-Chunking Architecture
+
+Google Apps Script's V8 engine enforces a strict **15.0 MB heap allocation ceiling** (`Exceeded memory limit`). Any multi-megabyte PDF ($\ge 14.0$ MB) ingested via `DriveApp` or `UrlFetchApp` causes unrecoverable out-of-memory crashes.
+
+To eliminate this bottleneck across knowledge extraction pipelines, the offline companion tier (`scripts/`) provides an automated, quota-safe pre-chunking fleet:
+
+1. **Dual Slicing Engine (`scripts/fleet_prechunker.py`):**
+   - **TOC Bookmark Hierarchy:** Extracts Level 1 and Level 2 bookmarks to slice books cleanly by chapter.
+   - **Dynamic Page Budgeting:** For flat/unindexed PDFs, dynamically calculates pages per chunk to target ~8 MB sub-PDFs.
+   - **Recursive Binary Bisection:** If any sliced chapter exceeds 13.5 MB, it is recursively bisected into Part 1 and Part 2.
+2. **150 DPI Single-Page Raster Optimization:**
+   - Uncompressed 300–600 DPI bitmap foldouts and maps (which can reach 20+ MB on a single page) are intercepted and re-encoded via PyMuPDF image insertion at 150 DPI, compressing 22 MB single pages down to 1.5–4.0 MB.
+3. **Quota-Safe Drive Uploads:**
+   - Implements 1.2s courteous delay between Drive API uploads.
+   - 4-tier exponential backoff with jitter on `googleapi: Error 403: RATE_LIMIT_EXCEEDED (Requests per minute)`.
+4. **Dynamic Drive Hierarchy Routing:**
+   - Accepts any inventory JSON and state file.
+   - Automatically checks or creates an `Extracted_Chapters` folder inside the source book's parent directory, uploading all compliant sub-PDFs ($< 13.5$ MB).
+
+### Production Fleet Scorecard
+
+| Target Drive Archive | Root ID | Folders Crawled | Files Scanned | Oversized Books ($\ge 14$ MB) | Generated Sub-PDF Chapters | Max Chunk Size |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **3rd Party Archives** | `13Ovbl0JQZ3EGXDBY7UDFeSP6gd8_sHTC` | 689 | 3,206 | **79** (11 publishers) | **887** | $\le 13.5$ MB |
+| **Suppliments** | `1RgAo-hdJ8qIERzyaa1xfvH9DZyhffsO9` | 24 | 1,005 | **40** (7 subdirs) | **597** | $\le 13.5$ MB |
+| **Total Fleet** | — | **713** | **4,211** | **119 books** | **1,484 chapters** | **100% compliant** |
+
 ## Testing & Deployment
 
 ```bash
 # Run complete test suite (SparkCore + Pipeline regressions)
 bun test
+
+# Run offline Python prechunker & crawler test suite
+python3 -m pytest tests/
 
 # Deploy all projects and shared library via clasp
 ./deploy.sh
