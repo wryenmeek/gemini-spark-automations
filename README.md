@@ -41,7 +41,7 @@ This repository contains the production source code, unit tests, clasp bindings,
 
 | Pipeline / System | Script ID & Clasp Target | Bound Target / Resource | Execution Triggers |
 | :--- | :--- | :--- | :--- |
-| **SparkCore Library** (`core/`) | Standalone Library | Global Apps Script Library | Referenced via library ID `SparkCore` |
+| **SparkCore Library** (`core/`) | [`1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh`](https://script.google.com/d/1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh/edit) (v1.0.0) | Global Apps Script Standalone Library | Exported library namespace `SparkCore` |
 | **1. Financial Receipts Ingestion** (`projects/receipts-ingestion`) | [`1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ`](https://script.google.com/d/1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ/edit) | [2026 Receipts Inventory](https://docs.google.com/spreadsheets/d/194nQzKDYo0Bt8tfO1P1UBAD-dtDgSb7CWDatv61-ADI/edit) | `setupDailyTrigger()` (Zero-token) |
 | **2. Writing Style Index** (`projects/writing-style-index`) | [`1yuepYNbNxeZmYvy7LfmNeN6k1XgKgn-jWNA3nNkHlWgAXdEPfbIzDIwu`](https://script.google.com/d/1yuepYNbNxeZmYvy7LfmNeN6k1XgKgn-jWNA3nNkHlWgAXdEPfbIzDIwu/edit) | [Writing Style & Tone Reference Index](https://docs.google.com/spreadsheets/d/1HPY3pKrgzeJr1FMLiK_UNyNJcfPTanJoPRL3ikF_nA8/edit) | `setupAllTriggers()` (Scans every 4h, Monthly clustering) |
 | **3. Drive Tagging Automation** (`projects/drive-tagging`) | [`1F2-pZJZ1jzfoNS7EgnQOYXOwii5YEU7rFOMKOWN52k2GQcWrBpPbp2-w`](https://script.google.com/d/1F2-pZJZ1jzfoNS7EgnQOYXOwii5YEU7rFOMKOWN52k2GQcWrBpPbp2-w/edit) | [Drive Tagging Master Index](https://docs.google.com/spreadsheets/d/1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA/edit) | `setupTaggingTriggers()` (Scans every 6h, Sync every 2h) |
@@ -51,7 +51,9 @@ This repository contains the production source code, unit tests, clasp bindings,
 
 ### 1. `GeminiFleet`
 - **Dynamic Full-Fleet Discovery:** Queries `GET /v1beta/models`, strips non-multimodal endpoints (`embedding`, `image`, `tts`), and ranks candidate models Flash-first (`2.5-flash` -> `2.5-flash-lite` -> `3.5-flash` -> `2.5-pro` -> `4-argon`).
+- **Canonical Model Ladder (`DEFAULT_MODEL_LADDER`):** Exports the centralized 18-tier model prioritization ladder, accessible via `SparkCore.DEFAULT_MODEL_LADDER` and `SparkCore.getDynamicModelLadder(apiKey, configLadder)`.
 - **429 Quota Tracking:** Distinguishes transient per-minute rate limits (RPM) from hard daily exhaustion (RPD). Automatically bans exhausted models across `CacheService` and `ScriptProperties` until midnight UTC.
+- **Failover Cascade:** Automatically cascades across fallback models when quotas are exhausted, injecting `_modelUsed` provenance onto returned JSON.
 
 ### 2. `DriveMetadata`
 - **Schema v1 JSONL Direct-to-Storage:** Encodes machine-readable JSONL into Google Drive's native 1,024-character `description` property:
@@ -59,22 +61,27 @@ This repository contains the production source code, unit tests, clasp bindings,
   {"schema_v": 1, "doc_type": "Invoice", "tags": ["Tax / Financial Record"], "confidence": 0.98, "tagged_by": "gemini_auto"}
   ```
 - **Zero-Token Pre-Flight Screening:** Allows scheduled scripts to screen Drive folders with 0 LLM API calls simply by checking if `description.includes('"schema_v"')`.
+- **Progressive Tag Trimming:** If metadata exceeds Drive's 1,024-byte boundary, tags are trimmed progressively down to 0 tags before failing.
 
 ### 3. `DriveUtils`
 - **Safe Document Creation:** Solves the Apps Script runtime trap where `DriveApp.Folder.createFile` fails on `MimeType.GOOGLE_DOCS` by using `DocumentApp.create` + `file.moveTo`.
 - **Recursive BFS Crawler:** Crawls folder hierarchies with visited ID set detection, execution time limits, and depth bounding.
-- **Drive ID Extraction:** Robust regex extraction `/([-\w]{25,})/` that converts URLs into pure File IDs.
-- **Safe Text Extraction:** Protects against raw PDF byte dumping into LLM prompts.
+- **Drive ID Extraction:** Robust regex extraction `/([-\w]{25,})/` that converts URLs into pure File IDs (`SparkCore.extractFileId`).
+- **Hierarchy & Filter Helpers:** Provides `getPrimaryParentId`, `isFolderExcluded`, and `isTitleExcluded` for fast pre-filtering.
+- **Multi-Format Text Extraction:** Safely extracts text from Google Docs, Google Slides shapes, and text/markdown files while avoiding raw PDF binary dumping.
 
 ### 4. `SheetKit`
 - **Queue Deduplication:** Scans existing `Review_Queue` tabs to extract pending File IDs, preventing infinite duplicate queuing across scheduled runs.
 - **Data Normalizers:** Sanitizes float years (`2025.0` -> `2025`) and Excel serial dates (`46241.0` -> `2026-08-07`).
+- **Formula Injection Defense:** Neutralizes CSV/formula injection characters (`=`, `+`, `-`, `@`, `\t`, `\r`) via `SparkCore.sanitizeCellValue`.
+- **In-Place Column Hygiene:** Batch deduplication (`deduplicateRowsByColumn`), column date cleaning (`normalizeDateColumn`), and missing description backfilling (`backfillEmptyCells`).
 - **Taxonomy Synonym Merging:** Dynamically maps approved synonym tags to canonical definitions.
-- **Chunked Batch Appends:** Chunks row insertions to stay within spreadsheet memory constraints.
+- **Chunked Batch Appends:** Chunks row insertions to stay within spreadsheet memory constraints with automatic grid expansion.
 
 ### 5. `Harness`
-- **Execution Budget Supervisor:** Tracks elapsed script time against Google's 6-minute cutoff (default budget: 240,000 ms), cleanly yielding execution before abrupt termination.
-- **Structured Error Dispatching:** Formats error reports and dispatches alert emails via `MailApp` / `GmailApp`.
+- **Execution Budget Supervisor:** Tracks elapsed script time against Google's 6-minute cutoff (default budget: 240,000 ms), cleanly yielding execution before abrupt termination (`createExecutionBudget`).
+- **Trigger Lifecycle Management:** Idempotent management for project triggers (`clearTriggers`, `installDailyTrigger`, `installIntervalTrigger`, `installWeeklyTrigger`).
+- **Consolidated Alerting & Notifications:** Google Tasks integration with fallback email routing (`createTaskAlert`) and multi-recipient email digest dispatching (`sendEmailDigest`).
 
 ## Offline Companion Tier: Fleet Pre-Chunking Architecture
 

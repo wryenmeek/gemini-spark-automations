@@ -31,7 +31,30 @@ This script implements background file detection in `My Drive` root, Gemini 2.5 
 
 const CONFIG = {
   SPREADSHEET_ID: '1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA',
+  PRIMARY_USER_EMAIL: 'wryenmeek@gmail.com',
   GEMINI_MODEL: 'gemini-2.5-flash',
+  MODEL_LADDER: (typeof SparkCore !== "undefined" && SparkCore.DEFAULT_MODEL_LADDER && SparkCore.DEFAULT_MODEL_LADDER.length > 0)
+    ? SparkCore.DEFAULT_MODEL_LADDER
+    : [
+        "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
+        "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
+        "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
+        "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
+        "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
+        "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
+        "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
+        "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
+        "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
+        "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
+        "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
+        "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
+        "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
+        "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
+        "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
+        "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
+        "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
+        "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
+      ],
   CONFIDENCE_THRESHOLD: 0.90, // Auto-approve if >= 0.90 and no new tags proposed
   BATCH_SIZE: 10,             // Max files processed per execution
   WORD_LIMIT: 1500,           // Max words sent to Gemini API for text/docs
@@ -47,11 +70,16 @@ function setupTaggingTriggers() {
     'syncApprovedTagsFromSheet',
     'sendWeeklyReviewDigest'
   ];
-  ScriptApp.getProjectTriggers().forEach(t => {
-    if (handlers.includes(t.getHandlerFunction())) {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
+
+  if (typeof SparkCore !== "undefined" && SparkCore.clearTriggers) {
+    SparkCore.clearTriggers(handlers);
+  } else {
+    ScriptApp.getProjectTriggers().forEach(t => {
+      if (handlers.includes(t.getHandlerFunction())) {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+  }
 
   ScriptApp.newTrigger('scanAndTagDriveFiles')
     .timeBased()
@@ -130,7 +158,15 @@ function scanAndTagDriveFiles() {
 
   let processedCount = 0;
 
+  const budget = typeof SparkCore !== "undefined" && SparkCore.createExecutionBudget
+    ? SparkCore.createExecutionBudget(240000)
+    : null;
+
   while (files.hasNext() && processedCount < CONFIG.BATCH_SIZE) {
+    if (budget && budget.isTimeExpiring()) {
+      Logger.log('[BUDGET_EXPIRED] Execution runtime budget limit reached (' + (budget.getElapsedMs() / 1000).toFixed(1) + 's). Halting drive scan safely.');
+      break;
+    }
     const file = files.next();
     const fileId = file.getId();
     const currentDescription = file.getDescription() || '';
@@ -155,7 +191,7 @@ function scanAndTagDriveFiles() {
         doc_type: aiResult.doc_type,
         tags: aiResult.existing_tags,
         confidence: aiResult.confidence,
-        tagged_by: 'gemini_auto',
+        tagged_by: aiResult._modelUsed || 'gemini_auto',
         updated_at: new Date().toISOString()
       };
       file.setDescription(JSON.stringify(jsonlPayload));
@@ -277,21 +313,30 @@ function sendWeeklyReviewDigest() {
       `Hello,\n\nYou have ${pendingCount} document(s) in your Google Drive pending tag review.\n\n` +
       `Please review and approve them here:\n${ss.getUrl()}\n\n` +
       `Best regards,\nDrive Tagging Automation`;
-    GmailApp.sendEmail(userEmail, subject, body);
+    if (typeof SparkCore !== "undefined" && SparkCore.sendEmailDigest) {
+      SparkCore.sendEmailDigest({ recipient: userEmail, subject: subject, body: body });
+    } else {
+      GmailApp.sendEmail(userEmail, subject, body);
+    }
   }
 }
 
 /**
- * HELPER: Classify file with Gemini 2.5 Flash (supports text snippets AND native inline PDF inspection)
+ * HELPER: Classify file with Gemini Multi-Tier Model Fleet (supports text snippets AND native inline PDF inspection)
  */
 function classifyFileWithGemini(file, taxonomyList) {
-  const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty('GEMINI_API_KEY');
   if (!apiKey) {
     Logger.log('Missing GEMINI_API_KEY in Script Properties.');
     return null;
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const customLadder = props.getProperty('GEMINI_MODEL_LADDER');
+  const ladder = customLadder
+    ? customLadder.split(',').map(m => m.trim()).filter(Boolean)
+    : CONFIG.MODEL_LADDER;
+
   const mime = file.getMimeType();
   const parts = [];
 
@@ -338,23 +383,101 @@ function classifyFileWithGemini(file, taxonomyList) {
     }
   };
 
-  try {
-    const response = UrlFetchApp.fetch(url, {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    });
-    if (response.getResponseCode() !== 200) {
-      Logger.log('Gemini API HTTP Error: ' + response.getContentText());
-      return null;
-    }
-    const json = JSON.parse(response.getContentText());
-    return JSON.parse(json.candidates[0].content.parts[0].text);
-  } catch (e) {
-    Logger.log('Gemini API Error: ' + e.toString());
-    return null;
+  return callGeminiAPI(payload, apiKey, ladder);
+}
+
+/**
+ * Checks whether an HTTP 429 response is due to exceeding the daily quota (RPD)
+ * vs a transient per-minute rate limit (RPM).
+ * Delegates to SparkCore.GeminiFleet.isDailyQuotaError.
+ */
+function isDailyQuotaError(statusCode, responseText) {
+  if (typeof SparkCore !== "undefined" && SparkCore.isDailyQuotaError) {
+    return SparkCore.isDailyQuotaError(statusCode, responseText);
   }
+  if (statusCode !== 429) return false;
+  if (!responseText) return false;
+  const text = responseText.toLowerCase();
+  return (
+    text.includes("per day") ||
+    text.includes("perday") ||
+    text.includes("requests per day") ||
+    text.includes("daily") ||
+    text.includes("free tier per day") ||
+    text.includes("quota exceeded for quota metric 'generatecontent requests' and limit 'generatecontent requests per day")
+  );
+}
+
+/**
+ * Calculates remaining seconds until the next UTC midnight (when Google AI Studio daily quotas reset).
+ * Delegates to SparkCore.GeminiFleet.getSecondsUntilUtcMidnight.
+ */
+function getSecondsUntilUtcMidnight() {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.getSecondsUntilUtcMidnight();
+  }
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
+  return Math.max(60, Math.floor((tomorrow.getTime() - now.getTime()) / 1000));
+}
+
+/**
+ * Marks a model as daily-exhausted across CacheService and ScriptProperties.
+ * Delegates to SparkCore.GeminiFleet.markModelDailyExhausted.
+ */
+function markModelDailyExhausted(model) {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.markModelDailyExhausted(model);
+  }
+}
+
+/**
+ * Checks if a model is currently flagged as having exceeded its daily quota limit.
+ * Delegates to SparkCore.GeminiFleet.isModelDailyExhausted.
+ */
+function isModelDailyExhausted(model) {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.isModelDailyExhausted(model);
+  }
+  return false;
+}
+
+/**
+ * Dynamically queries the Gemini API to discover all available models supporting generateContent.
+ * Delegates to SparkCore.discoverAvailableModels.
+ */
+function discoverAvailableModels(apiKey) {
+  if (typeof SparkCore !== "undefined" && SparkCore.discoverAvailableModels) {
+    return SparkCore.discoverAvailableModels(apiKey);
+  }
+  return CONFIG.MODEL_LADDER;
+}
+
+/**
+ * Assembles the active dynamic model ladder.
+ * Delegates to SparkCore.GeminiFleet.getDynamicModelLadder.
+ */
+function getDynamicModelLadder(apiKey, configLadder) {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.getDynamicModelLadder(apiKey, configLadder);
+  }
+  return [];
+}
+
+/**
+ * Invokes the Gemini API via UrlFetchApp with Dynamic Model Discovery, Daily Limit Tracking,
+ * and Exponential Backoff.
+ * Delegates to SparkCore.callGeminiAPI.
+ */
+function callGeminiAPI(payload, apiKey, modelOrLadder, options) {
+  if (typeof SparkCore !== "undefined" && SparkCore.callGeminiAPI) {
+    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder, options);
+    if (res && res._modelUsed) {
+      Logger.log('[SUCCESS] Extracted tags using model: "' + res._modelUsed + '"');
+    }
+    return res;
+  }
+  return null;
 }
 
 /**
@@ -380,9 +503,13 @@ INSTRUCTIONS:
 }
 
 /**
- * HELPER: Extract text snippet from Google Doc or plain text/markdown file
+ * HELPER: Extract text snippet from Google Doc or plain text/markdown file.
+ * Delegates to SparkCore.DriveUtils.extractFileTextSnippet.
  */
 function extractFileTextSnippet(file, wordLimit) {
+  if (typeof SparkCore !== "undefined" && SparkCore.extractFileTextSnippet) {
+    return SparkCore.extractFileTextSnippet(file, wordLimit);
+  }
   try {
     let text = '';
     const mime = file.getMimeType();
@@ -414,9 +541,13 @@ function getCanonicalTaxonomy(sheet) {
 }
 
 /**
- * HELPER: Read all File IDs already present in Review_Queue so they are never queued twice
+ * HELPER: Read all File IDs already present in Review_Queue so they are never queued twice.
+ * Delegates to SparkCore.SheetKit.getQueuedFileIds.
  */
 function getQueuedFileIds(queueSheet) {
+  if (typeof SparkCore !== "undefined" && SparkCore.getQueuedFileIds) {
+    return SparkCore.getQueuedFileIds(queueSheet, 3);
+  }
   const ids = new Set();
   if (!queueSheet || queueSheet.getLastRow() < 2) return ids;
   const values = queueSheet.getRange(2, 3, queueSheet.getLastRow() - 1, 1).getValues();
@@ -437,7 +568,13 @@ function testDriveTaggingDryRun() {
   const queueSheet = ss.getSheetByName('Review_Queue');
   const taxonomy = getCanonicalTaxonomy(taxonomySheet);
   const queued = getQueuedFileIds(queueSheet);
-  const hasKey = Boolean(PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY'));
-  Logger.log(`[PASS] Sheet: ${ss.getName()} | Taxonomy terms: ${taxonomy.length} | Queued IDs: ${queued.size} | API Key set: ${hasKey}`);
+  const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  const hasKey = Boolean(apiKey);
+  let ladderInfo = 'None';
+  if (hasKey) {
+    const ladder = getDynamicModelLadder(apiKey, CONFIG.MODEL_LADDER);
+    ladderInfo = ladder.join(' -> ');
+  }
+  Logger.log(`[PASS] Sheet: ${ss.getName()} | Taxonomy terms: ${taxonomy.length} | Queued IDs: ${queued.size} | API Key set: ${hasKey} | Active Ladder: ${ladderInfo}`);
 }
 ```

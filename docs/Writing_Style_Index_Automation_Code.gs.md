@@ -52,34 +52,51 @@ ________________
 
 4. Complete Production Source Code (Code.gs)
 
-
-/**
+```javascript
+/**
  * Autonomous Writing Style & Tone Reference Index System (Consolidated v2.2)
  * Master Spreadsheet ID: 1HPY3pKrgzeJr1FMLiK_UNyNJcfPTanJoPRL3ikF_nA8
  */
 
-
 const DEFAULT_CONFIG = {
   SPREADSHEET_ID: '1HPY3pKrgzeJr1FMLiK_UNyNJcfPTanJoPRL3ikF_nA8',
   PRIMARY_USER_EMAIL: 'wryenmeek@gmail.com',
-  MODEL_SELECTION_MODE: 'DYNAMIC',
-  PREFERRED_MODEL_PATTERN: 'flash',
   GEMINI_MODEL: 'gemini-2.5-flash',
+  MODEL_LADDER: (typeof SparkCore !== "undefined" && SparkCore.DEFAULT_MODEL_LADDER && SparkCore.DEFAULT_MODEL_LADDER.length > 0)
+    ? SparkCore.DEFAULT_MODEL_LADDER
+    : [
+        "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
+        "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
+        "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
+        "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
+        "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
+        "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
+        "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
+        "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
+        "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
+        "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
+        "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
+        "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
+        "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
+        "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
+        "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
+        "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
+        "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
+        "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
+      ],
   CONFIDENCE_THRESHOLD: 0.90,
   MIN_WORD_COUNT: 150,
   MAX_TEXT_LENGTH: 8000,
   BATCH_SIZE: 25,
   SCAN_WINDOW_DAYS: 7,
-  RATE_LIMIT_DELAY_MS: 12500,
   EXCLUDED_FOLDER_IDS: [
     '1XQyRsEx8gQl8idUv_UhfRMYxS9dIx0tk', // gemini-spark (system automation docs)
     '1pkvyPz6_VGhLS2HS7mcpeAyg3Plz3rvF', // Taxes/2025/Receipts
-    '10tPOp6kaCSb99sDpwUqdgX3tiCEQ3oS7', // Campaign Generated Documents
     '1tAcCCcSOrv4Yprrm6IrjWKB00fJc9-wX'  // Taxes/2026/Receipts
   ],
   EXCLUDED_TITLE_KEYWORDS: [
     'receipt', 'invoice', 'outline', 'draft_temp', 'expense', 'billing',
-    'raw', 'transcript', 'statblock', 'code.gs'
+    'raw_transcript', 'cleaned_transcript', 'statblock', 'code.gs'
   ],
   SHEETS: {
     MASTER_INDEX: 'Master Index',
@@ -95,7 +112,6 @@ const DEFAULT_CONFIG = {
   }
 };
 
-
 /**
  * Installs all recurring triggers (Daily Scan, Daily Approval Sync, Weekly Task, Monthly Clustering)
  */
@@ -107,12 +123,16 @@ function setupAllTriggers() {
     'runMonthlyTaxonomyClustering',
     'dailyStyleIndexUpdate'
   ];
-  ScriptApp.getProjectTriggers().forEach(t => {
-    if (handlers.includes(t.getHandlerFunction())) {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
 
+  if (typeof SparkCore !== "undefined" && SparkCore.clearTriggers) {
+    SparkCore.clearTriggers(handlers);
+  } else {
+    ScriptApp.getProjectTriggers().forEach(t => {
+      if (handlers.includes(t.getHandlerFunction())) {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+  }
 
   ScriptApp.newTrigger('scanAndIndexWritingSamples')
     .timeBased()
@@ -120,13 +140,11 @@ function setupAllTriggers() {
     .atHour(6)
     .create();
 
-
   ScriptApp.newTrigger('syncApprovedReviewsFromQueue')
     .timeBased()
     .everyDays(1)
     .atHour(7)
     .create();
-
 
   ScriptApp.newTrigger('syncWeeklyReviewTasks')
     .timeBased()
@@ -134,17 +152,14 @@ function setupAllTriggers() {
     .atHour(9)
     .create();
 
-
   ScriptApp.newTrigger('runMonthlyTaxonomyClustering')
     .timeBased()
     .onMonthDay(1)
     .atHour(10)
     .create();
 
-
   Logger.log('Installed all 4 Writing Style Index automation triggers.');
 }
-
 
 /**
  * Loads dynamic runtime settings from System_Config tab (creating auxiliary tabs if absent).
@@ -159,10 +174,8 @@ function loadSystemConfig(ss) {
     sheet.appendRow(['EXCLUDED_TITLE_KEYWORDS', DEFAULT_CONFIG.EXCLUDED_TITLE_KEYWORDS.join(','), 'Comma-separated lower-case title triggers']);
     sheet.appendRow(['CONFIDENCE_THRESHOLD', String(DEFAULT_CONFIG.CONFIDENCE_THRESHOLD), 'Min score for auto-indexing (0.0 - 1.0)']);
     sheet.appendRow(['GEMINI_MODEL', DEFAULT_CONFIG.GEMINI_MODEL, 'Gemini Model endpoint name']);
-    sheet.appendRow(['MODEL_SELECTION_MODE', DEFAULT_CONFIG.MODEL_SELECTION_MODE, 'Model selection mode: DYNAMIC or STATIC']);
-    sheet.appendRow(['PREFERRED_MODEL_PATTERN', DEFAULT_CONFIG.PREFERRED_MODEL_PATTERN, 'Preferred model regex pattern (default: flash)']);
+    sheet.appendRow(['GEMINI_MODEL_LADDER', DEFAULT_CONFIG.MODEL_LADDER.join(','), 'Comma-separated Gemini model rotation ladder']);
     sheet.appendRow(['SCAN_WINDOW_DAYS', String(DEFAULT_CONFIG.SCAN_WINDOW_DAYS), 'Lookback window for updated Drive files']);
-    sheet.appendRow(['RATE_LIMIT_DELAY_MS', String(DEFAULT_CONFIG.RATE_LIMIT_DELAY_MS), 'Milliseconds delay between Gemini API calls (<5 RPM)']);
     sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
     sheet.setFrozenRows(1);
   } else {
@@ -179,21 +192,25 @@ function loadSystemConfig(ss) {
         config.CONFIDENCE_THRESHOLD = parseFloat(val) || DEFAULT_CONFIG.CONFIDENCE_THRESHOLD;
       } else if (key === 'GEMINI_MODEL') {
         config.GEMINI_MODEL = val || DEFAULT_CONFIG.GEMINI_MODEL;
-      } else if (key === 'MODEL_SELECTION_MODE') {
-        config.MODEL_SELECTION_MODE = val.toUpperCase() || DEFAULT_CONFIG.MODEL_SELECTION_MODE;
-      } else if (key === 'PREFERRED_MODEL_PATTERN') {
-        config.PREFERRED_MODEL_PATTERN = val.toLowerCase() || DEFAULT_CONFIG.PREFERRED_MODEL_PATTERN;
+      } else if (key === 'GEMINI_MODEL_LADDER') {
+        config.MODEL_LADDER = val ? val.split(',').map(s => s.trim()).filter(Boolean) : DEFAULT_CONFIG.MODEL_LADDER;
       } else if (key === 'SCAN_WINDOW_DAYS') {
         config.SCAN_WINDOW_DAYS = parseInt(val, 10) || DEFAULT_CONFIG.SCAN_WINDOW_DAYS;
-      } else if (key === 'RATE_LIMIT_DELAY_MS') {
-        config.RATE_LIMIT_DELAY_MS = parseInt(val, 10) || DEFAULT_CONFIG.RATE_LIMIT_DELAY_MS;
       }
     }
   }
+
+  try {
+    const scriptProps = PropertiesService.getScriptProperties();
+    const customLadder = scriptProps ? scriptProps.getProperty('GEMINI_MODEL_LADDER') : null;
+    if (customLadder) {
+      config.MODEL_LADDER = customLadder.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  } catch (_e) {}
+
   ensureAuxiliaryTabsExist(ss, config);
   return config;
 }
-
 
 /**
  * Ensures Review_Queue, Taxonomy_Proposals, and Evals_Log exist with standard headers
@@ -213,6 +230,7 @@ function ensureAuxiliaryTabsExist(ss, config) {
     queueSheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
     queueSheet.setFrozenRows(1);
   }
+
   let proposalsSheet = ss.getSheetByName(config.SHEETS.TAXONOMY_PROPOSALS);
   if (!proposalsSheet) {
     proposalsSheet = ss.insertSheet(config.SHEETS.TAXONOMY_PROPOSALS);
@@ -220,6 +238,7 @@ function ensureAuxiliaryTabsExist(ss, config) {
     proposalsSheet.getRange(1, 1, 1, 4).setFontWeight('bold');
     proposalsSheet.setFrozenRows(1);
   }
+
   let evalSheet = ss.getSheetByName(config.SHEETS.EVALS_LOG);
   if (!evalSheet) {
     evalSheet = ss.insertSheet(config.SHEETS.EVALS_LOG);
@@ -229,7 +248,6 @@ function ensureAuxiliaryTabsExist(ss, config) {
   }
 }
 
-
 /**
  * Main daily pipeline for searching and processing Drive files (with Rule 0 historical backfill).
  */
@@ -237,34 +255,29 @@ function scanAndIndexWritingSamples() {
   const ss = SpreadsheetApp.openById(DEFAULT_CONFIG.SPREADSHEET_ID);
   const config = loadSystemConfig(ss);
   const existingFileIds = getIndexedFileIds(ss, config);
+
   const scriptProps = PropertiesService.getScriptProperties();
-
-
   if (!scriptProps.getProperty('SHEET_REMEDIATED_V2_2')) {
     remediateStyleIndexSheet(ss, config);
     scriptProps.setProperty('SHEET_REMEDIATED_V2_2', 'true');
   }
-
 
   const lastRunIso = scriptProps.getProperty('LAST_RUN_TIMESTAMP');
   const now = new Date();
   const fallbackLookback = new Date(now.getTime() - (config.SCAN_WINDOW_DAYS * 24 * 60 * 60 * 1000));
   const startDate = lastRunIso ? new Date(lastRunIso) : fallbackLookback;
   const isoDate = startDate.toISOString();
+
   const mimeFilter =
     "(mimeType = 'application/vnd.google-apps.document' or " +
     "mimeType = 'application/vnd.google-apps.presentation' or " +
-    "mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or " +
-    "mimeType = 'application/msword' or " +
-    "mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation' or " +
-    "mimeType = 'application/vnd.oasis.opendocument.text' or " +
     "mimeType = 'text/plain' or " +
     "mimeType = 'text/markdown')";
 
-
+  // Phase 1A: Recent delta query (`modifiedDate` in Drive API v2)
   const deltaQuery = "modifiedDate > '" + isoDate + "' and trashed = false and " + mimeFilter;
+  // Phase 1B: Rule 0 Historical Backfill query (if delta yields < BATCH_SIZE unprocessed files)
   const historicalQuery = "trashed = false and " + mimeFilter;
-
 
   const masterRows = [];
   const rejectedRows = [];
@@ -272,122 +285,156 @@ function scanAndIndexWritingSamples() {
   const todayStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   let processedInThisRun = 0;
 
+  const budget = typeof SparkCore !== "undefined" && SparkCore.createExecutionBudget
+    ? SparkCore.createExecutionBudget(config.MAX_RUN_TIME_MS || 240000)
+    : null;
 
   function processFileIterator(files) {
     while (files.hasNext() && processedInThisRun < config.BATCH_SIZE) {
+      if (budget && budget.isTimeExpiring()) {
+        Logger.log('[BUDGET_EXPIRED] Execution runtime budget limit reached (' + (budget.getElapsedMs() / 1000).toFixed(1) + 's). Halting scan safely.');
+        break;
+      }
       const file = files.next();
       const fileId = file.getId();
       if (existingFileIds.has(fileId)) continue;
+
       existingFileIds.add(fileId);
       processedInThisRun++;
-
 
       const fileName = file.getName();
       const fileUrl = file.getUrl();
       const ownerEmail = file.getOwner() ? file.getOwner().getEmail() : 'Unknown';
       const parentId = getPrimaryParentId(file);
 
-
-      // RULE 2: Human Authorship Verification
+      // RULE 2: Human Authorship & Provenance Verification
       if (ownerEmail.toLowerCase() !== config.PRIMARY_USER_EMAIL.toLowerCase()) {
         rejectedRows.push([
-          fileName, todayStr, ownerEmail,
-          'Non-Wryen Author / Shared Document', 'External Collaborators',
-          'Third-Party Shared Material', 'Collaborator Document',
+          fileName,
+          todayStr,
+          ownerEmail,
+          'Non-Wryen Author / Shared Document',
+          'External Collaborators',
+          'Third-Party Shared Material',
+          'Collaborator Document',
           'Neutral & Informational',
           'Owned by ' + ownerEmail + '; fails Rule 2 (requires Wryen authorship).',
-          fileUrl, 'Excluded [FolderID:' + parentId + ']'
+          fileUrl,
+          'Excluded [FolderID:' + parentId + ']'
         ]);
         continue;
       }
-
 
       // Zero-Token Folder & Title Gatekeeper
       if (isFolderExcluded(file, config.EXCLUDED_FOLDER_IDS) || isTitleExcluded(fileName, config.EXCLUDED_TITLE_KEYWORDS)) {
         rejectedRows.push([
-          fileName, todayStr, 'Wryen Meek / Automated System',
-          'Zero-Token Gatekeeper Filter', 'Self & Operations',
-          'Administrative / Operational Artifact', 'Structured Reference / Template',
+          fileName,
+          todayStr,
+          'Wryen Meek / Automated System',
+          'Zero-Token Gatekeeper Filter',
+          'Self & Operations',
+          'Administrative / Operational Artifact',
+          'Structured Reference / Template',
           'Functional & Objective',
           'Excluded by folder boundary or title keyword filter.',
-          fileUrl, 'Excluded [FolderID:' + parentId + ']'
+          fileUrl,
+          'Excluded [FolderID:' + parentId + ']'
         ]);
         continue;
       }
 
-
       const textContent = extractFileText(file, config.MAX_TEXT_LENGTH);
       const wordCount = countWords(textContent);
-
 
       // RULE 3: Substantiality & Quality Threshold (>= 150 words)
       if (wordCount < config.MIN_WORD_COUNT) {
         rejectedRows.push([
-          fileName, todayStr, 'Wryen Meek (' + ownerEmail + ')',
-          'Below Minimum Length / Non-Substantive', 'Self',
-          'Working Notes / Short Fragment', 'Short Fragment (< 150 words)',
+          fileName,
+          todayStr,
+          'Wryen Meek (' + ownerEmail + ')',
+          'Below Minimum Length / Non-Substantive',
+          'Self',
+          'Working Notes / Short Fragment',
+          'Short Fragment (< 150 words)',
           'Informal & Concise',
           'Word count (' + wordCount + ' words) below 150-word threshold; fails Rule 3.',
-          fileUrl, 'Excluded [FolderID:' + parentId + ']'
+          fileUrl,
+          'Excluded [FolderID:' + parentId + ']'
         ]);
         autoDiscoverExclusion(ss, parentId, rejectedRows);
         continue;
       }
 
-
-      // Evaluate with Gemini (including Rule 1 GenAI screening)
+      // Evaluate with Gemini 2.5 Flash (including Rule 1 GenAI artifact screening)
       try {
         const classification = classifySampleWithGemini(textContent, fileName, config);
 
-
+        // RULE 1: GenAI & Automated Output Disambiguation
         if (classification.isAiGenerated) {
           rejectedRows.push([
-            fileName, todayStr, 'Gemini / GenAI Agent',
-            'AI-Generated / GenAI Artifact', classification.audience,
-            classification.topic, classification.style, classification.tone,
+            fileName,
+            todayStr,
+            'Gemini / GenAI Agent',
+            'AI-Generated / GenAI Artifact',
+            classification.audience,
+            classification.topic,
+            classification.style,
+            classification.tone,
             classification.rejectionReason || 'Identified as GenAI-generated or automated output; fails Rule 1.',
-            fileUrl, 'Excluded [FolderID:' + parentId + ']'
+            fileUrl,
+            'Excluded [FolderID:' + parentId + ']'
           ]);
           autoDiscoverExclusion(ss, parentId, rejectedRows);
           continue;
         }
 
-
         const isSoleAuthor = file.getEditors().length === 0;
         const isHighConfidence = classification.confidenceScore >= config.CONFIDENCE_THRESHOLD && !classification.hasAmbiguity;
         const docYear = Utilities.formatDate(file.getDateCreated(), Session.getScriptTimeZone(), 'yyyy');
 
-
         if (isHighConfidence && isSoleAuthor) {
           masterRows.push([
-            fileName, docYear, classification.audience,
-            classification.topic, classification.style, classification.tone,
-            classification.exemplaryQuote, fileUrl, classification.strategicNotes
+            fileName,
+            docYear,
+            classification.audience,
+            classification.topic,
+            classification.style,
+            classification.tone,
+            classification.exemplaryQuote,
+            fileUrl,
+            classification.strategicNotes
           ]);
           syncTaxonomy(ss, config, classification, fileName, docYear);
           logEvalRecord(ss, config, file, classification, 'AUTO_INDEXED');
         } else {
           queueRows.push([
-            fileName, fileUrl, fileId, docYear,
-            classification.audience, classification.topic, classification.style,
-            classification.tone, classification.exemplaryQuote, classification.strategicNotes,
-            classification.confidenceScore, 'PENDING_REVIEW'
+            fileName,
+            fileUrl,
+            fileId,
+            docYear,
+            classification.audience,
+            classification.topic,
+            classification.style,
+            classification.tone,
+            classification.exemplaryQuote,
+            classification.strategicNotes,
+            classification.confidenceScore,
+            'PENDING_REVIEW'
           ]);
           logEvalRecord(ss, config, file, classification, 'QUEUED_FOR_REVIEW');
         }
-        Utilities.sleep(config.RATE_LIMIT_DELAY_MS || 12500);
       } catch (classifyErr) {
         handleScriptError(ss, config, 'Classification failure: ' + fileName, classifyErr);
       }
     }
   }
 
-
   try {
     processFileIterator(DriveApp.searchFiles(deltaQuery));
     if (processedInThisRun < config.BATCH_SIZE) {
       processFileIterator(DriveApp.searchFiles(historicalQuery));
     }
+
     if (rejectedRows.length > 0) {
       appendRowsInBatch(ss.getSheetByName(config.SHEETS.REJECTED_LOG), rejectedRows);
     }
@@ -397,13 +444,15 @@ function scanAndIndexWritingSamples() {
     if (queueRows.length > 0) {
       appendRowsInBatch(ss.getSheetByName(config.SHEETS.REVIEW_QUEUE), queueRows);
     }
+
     scriptProps.setProperty('LAST_RUN_TIMESTAMP', now.toISOString());
-    Logger.log(`Completed scanAndIndexWritingSamples. Processed: ${processedInThisRun}, Master: ${masterRows.length}, Queued: ${queueRows.length}, Rejected: ${rejectedRows.length}`);
+    Logger.log(
+      `Completed scanAndIndexWritingSamples. Processed: ${processedInThisRun}, Master: ${masterRows.length}, Queued: ${queueRows.length}, Rejected: ${rejectedRows.length}`
+    );
   } catch (err) {
     handleScriptError(ss, config, 'Drive search pipeline failed', err);
   }
 }
-
 
 /**
  * Promotes human-approved rows from Review_Queue to Master Index and executes approved Taxonomy_Proposals merges
@@ -413,7 +462,6 @@ function syncApprovedReviewsFromQueue() {
   const config = loadSystemConfig(ss);
   const reviewSheet = ss.getSheetByName(config.SHEETS.REVIEW_QUEUE);
   const masterSheet = ss.getSheetByName(config.SHEETS.MASTER_INDEX);
-
 
   if (reviewSheet && reviewSheet.getLastRow() > 1) {
     const data = reviewSheet.getDataRange().getValues();
@@ -433,13 +481,22 @@ function syncApprovedReviewsFromQueue() {
           exemplaryQuote: row[8],
           strategicNotes: row[9]
         };
+
         masterSheet.appendRow([
-          title, year, classification.audience, classification.topic,
-          classification.style, classification.tone, classification.exemplaryQuote,
-          url, classification.strategicNotes
+          title,
+          year,
+          classification.audience,
+          classification.topic,
+          classification.style,
+          classification.tone,
+          classification.exemplaryQuote,
+          url,
+          classification.strategicNotes
         ]);
+
         syncTaxonomy(ss, config, classification, title, year);
         reviewSheet.getRange(i + 1, 12).setValue('INDEXED');
+
         const evalSheet = ss.getSheetByName(config.SHEETS.EVALS_LOG);
         if (evalSheet) {
           evalSheet.appendRow([new Date(), title, fileId, '', JSON.stringify(classification), 'HUMAN_APPROVED']);
@@ -449,9 +506,9 @@ function syncApprovedReviewsFromQueue() {
       }
     }
   }
+
   applyApprovedTaxonomyMerges(ss, config);
 }
-
 
 /**
  * Executes 1-click taxonomy consolidations when rows in Taxonomy_Proposals are marked APPROVED
@@ -462,14 +519,12 @@ function applyApprovedTaxonomyMerges(ss, config) {
   const masterSheet = ss.getSheetByName(config.SHEETS.MASTER_INDEX);
   if (!proposalsSheet || proposalsSheet.getLastRow() <= 1 || !masterSheet) return;
 
-
   const colMap = {
-    [config.SHEETS.AUDIENCES]: 3,
-    [config.SHEETS.TOPICS]: 4,
-    [config.SHEETS.STYLES]: 5,
-    [config.SHEETS.TONES]: 6
+    [config.SHEETS.AUDIENCES]: 3, // Col C in Master Index (1-based)
+    [config.SHEETS.TOPICS]: 4,    // Col D in Master Index
+    [config.SHEETS.STYLES]: 5,    // Col E in Master Index
+    [config.SHEETS.TONES]: 6      // Col F in Master Index
   };
-
 
   const propData = proposalsSheet.getDataRange().getValues();
   for (let i = 1; i < propData.length; i++) {
@@ -477,13 +532,17 @@ function applyApprovedTaxonomyMerges(ss, config) {
     const canonicalTerm = String(propData[i][1] || '').trim();
     const termsToMergeRaw = String(propData[i][2] || '').trim();
     const status = String(propData[i][3] || '').trim().toUpperCase();
-    if (status !== 'APPROVED' || !canonicalTerm || !termsToMergeRaw || !colMap[category]) continue;
 
+    if (status !== 'APPROVED' || !canonicalTerm || !termsToMergeRaw || !colMap[category]) {
+      continue;
+    }
 
-    const mergeSet = new Set(termsToMergeRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
+    const mergeSet = new Set(
+      termsToMergeRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    );
     const masterCol = colMap[category];
 
-
+    // 1. Rewrite matching cells in Master Index
     if (masterSheet.getLastRow() > 2) {
       const range = masterSheet.getRange(3, masterCol, masterSheet.getLastRow() - 2, 1);
       const vals = range.getValues();
@@ -498,7 +557,7 @@ function applyApprovedTaxonomyMerges(ss, config) {
       if (changed) range.setValues(vals);
     }
 
-
+    // 2. Ensure canonicalTerm exists in the category tab and remove merged synonym rows
     const taxSheet = ss.getSheetByName(category);
     if (taxSheet && taxSheet.getLastRow() > 1) {
       const taxRows = taxSheet.getDataRange().getValues();
@@ -520,69 +579,85 @@ function applyApprovedTaxonomyMerges(ss, config) {
         }
       }
     }
+
     proposalsSheet.getRange(i + 1, 4).setValue('CONSOLIDATED');
   }
 }
 
-
 /**
- * Remediates legacy spreadsheet data findings
+ * Remediates legacy spreadsheet data findings:
+ * 1. Normalizes float years ('2020.0') and Excel serial dates ('46241.0') in Master Index & Rejected Files.
+ * 2. Deduplicates rows in Master Index sharing the same Google Drive File ID.
+ * 3. Backfills missing Description cells on Audiences, Topics, Styles, and Tones tabs.
  */
 function remediateStyleIndexSheet(ss, config) {
   ss = ss || SpreadsheetApp.openById(DEFAULT_CONFIG.SPREADSHEET_ID);
   config = config || loadSystemConfig(ss);
 
-
+  // 1. Clean Master Index dates & deduplicate by File ID
   const masterSheet = ss.getSheetByName(config.SHEETS.MASTER_INDEX);
   if (masterSheet && masterSheet.getLastRow() > 2) {
-    const rows = masterSheet.getDataRange().getValues();
-    const seenIds = new Set();
-    const duplicateRowIndices = [];
-    for (let i = 2; i < rows.length; i++) {
-      const rawYear = rows[i][1];
-      const cleanYear = normalizeYearOrDateCell(rawYear);
-      if (cleanYear !== String(rawYear)) {
-        masterSheet.getRange(i + 1, 2).setValue(cleanYear);
-      }
-      const url = String(rows[i][7] || '').trim();
-      const match = url.match(/[-\w]{25,}/);
-      const idKey = match ? match[0] : url;
-      if (idKey && url.startsWith('http')) {
-        if (seenIds.has(idKey)) {
-          duplicateRowIndices.push(i + 1);
-        } else {
-          seenIds.add(idKey);
+    if (typeof SparkCore !== "undefined" && SparkCore.normalizeDateColumn && SparkCore.deduplicateRowsByColumn) {
+      SparkCore.normalizeDateColumn(masterSheet, 2, { startRow: 3, fullDate: false });
+      SparkCore.deduplicateRowsByColumn(masterSheet, 8, { startRow: 3, extractId: true });
+    } else {
+      const rows = masterSheet.getDataRange().getValues();
+      const seenIds = new Set();
+      const duplicateRowIndices = [];
+
+      for (let i = 2; i < rows.length; i++) {
+        const rawYear = rows[i][1];
+        const cleanYear = normalizeYearOrDateCell(rawYear);
+        if (cleanYear !== String(rawYear)) {
+          masterSheet.getRange(i + 1, 2).setValue(cleanYear);
+        }
+
+        const url = String(rows[i][7] || '').trim();
+        const match = url.match(/[-\w]{25,}/);
+        const idKey = match ? match[0] : url;
+        if (idKey && url.startsWith('http')) {
+          if (seenIds.has(idKey)) {
+            duplicateRowIndices.push(i + 1);
+          } else {
+            seenIds.add(idKey);
+          }
         }
       }
-    }
-    for (let d = duplicateRowIndices.length - 1; d >= 0; d--) {
-      masterSheet.deleteRow(duplicateRowIndices[d]);
-    }
-  }
 
-
-  const rejectedSheet = ss.getSheetByName(config.SHEETS.REJECTED_LOG);
-  if (rejectedSheet && rejectedSheet.getLastRow() > 1) {
-    const dateRange = rejectedSheet.getRange(2, 2, rejectedSheet.getLastRow() - 1, 1);
-    const dateVals = dateRange.getValues();
-    let changed = false;
-    for (let i = 0; i < dateVals.length; i++) {
-      const cleaned = normalizeYearOrDateCell(dateVals[i][0], true);
-      if (cleaned !== String(dateVals[i][0])) {
-        dateVals[i][0] = cleaned;
-        changed = true;
+      for (let d = duplicateRowIndices.length - 1; d >= 0; d--) {
+        masterSheet.deleteRow(duplicateRowIndices[d]);
       }
     }
-    if (changed) dateRange.setValues(dateVals);
   }
 
+  // 2. Clean Rejected Files Excel serial dates
+  const rejectedSheet = ss.getSheetByName(config.SHEETS.REJECTED_LOG);
+  if (rejectedSheet && rejectedSheet.getLastRow() > 1) {
+    if (typeof SparkCore !== "undefined" && SparkCore.normalizeDateColumn) {
+      SparkCore.normalizeDateColumn(rejectedSheet, 2, { startRow: 2, fullDate: true });
+    } else {
+      const dateRange = rejectedSheet.getRange(2, 2, rejectedSheet.getLastRow() - 1, 1);
+      const dateVals = dateRange.getValues();
+      let changed = false;
+      for (let i = 0; i < dateVals.length; i++) {
+        const cleaned = normalizeYearOrDateCell(dateVals[i][0], true);
+        if (cleaned !== String(dateVals[i][0])) {
+          dateVals[i][0] = cleaned;
+          changed = true;
+        }
+      }
+      if (changed) dateRange.setValues(dateVals);
+    }
+  }
 
+  // 3. Backfill missing descriptions in Audiences, Topics, Styles, and Tones
   const taxDefaults = [
     { name: config.SHEETS.AUDIENCES, desc: 'Target reader group for Wryen-authored documents.', isAudience: true },
     { name: config.SHEETS.TOPICS, desc: 'Primary subject domain in the Writing Style Reference Index.', isAudience: false },
     { name: config.SHEETS.STYLES, desc: 'Structural and compositional writing style pattern.', isAudience: false },
     { name: config.SHEETS.TONES, desc: 'Emotional and attitudinal register marker.', isAudience: false }
   ];
+
   taxDefaults.forEach(t => {
     const sheet = ss.getSheetByName(t.name);
     if (!sheet || sheet.getLastRow() <= 1) return;
@@ -603,22 +678,24 @@ function remediateStyleIndexSheet(ss, config) {
     }
     if (updated) range.setValues(vals);
   });
+
   Logger.log('Completed remediateStyleIndexSheet data hygiene pass.');
 }
 
-
 /**
- * Converts float years ('2020.0') or Excel serial dates ('46241.0') into clean strings
+ * Converts float years ('2020.0') or Excel serial dates ('46241.0') into clean strings.
+ * Delegates to SparkCore.SheetKit.normalizeYearOrDateCell.
  */
 function normalizeYearOrDateCell(val, fullDate) {
+  if (typeof SparkCore !== "undefined" && SparkCore.normalizeYearOrDateCell) {
+    return SparkCore.normalizeYearOrDateCell(val, fullDate);
+  }
   if (val instanceof Date) {
     return Utilities.formatDate(val, 'UTC', fullDate ? 'yyyy-MM-dd' : 'yyyy');
   }
   const str = String(val || '').trim();
   if (!str) return '';
-  if (/^(19|20)\d{2}(\.0+)?$/.test(str)) {
-    return str.substring(0, 4);
-  }
+  if (/^(19|20)\d{2}(\.0+)?$/.test(str)) return str.substring(0, 4);
   if (/^\d{5}(\.\d+)?$/.test(str)) {
     const serial = parseFloat(str);
     if (serial >= 40000 && serial <= 55000) {
@@ -630,29 +707,35 @@ function normalizeYearOrDateCell(val, fullDate) {
   return str;
 }
 
-
 /**
- * Batch row appender
+ * Batch row appender.
+ * Delegates to SparkCore.SheetKit.batchAppendRows.
  */
 function appendRowsInBatch(sheet, rows) {
+  if (typeof SparkCore !== "undefined" && SparkCore.batchAppendRows) {
+    return SparkCore.batchAppendRows(sheet, rows);
+  }
   if (!sheet || rows.length === 0) return;
   const lastRow = sheet.getLastRow();
   const numCols = rows[0].length;
   sheet.getRange(lastRow + 1, 1, rows.length, numCols).setValues(rows);
 }
 
-
 /**
- * Extracts all processed Google Drive File IDs
+ * Extracts all processed Google Drive File IDs from URLs or raw ID cells across Master, Review_Queue, and Rejected tabs.
+ * Delegates to SparkCore.SheetKit.getIndexedFileIds.
  */
 function getIndexedFileIds(ss, config) {
   config = config || DEFAULT_CONFIG;
-  const ids = new Set();
   const map = [
     { name: config.SHEETS.MASTER_INDEX, col: 8 },
     { name: config.SHEETS.REVIEW_QUEUE, col: 3 },
     { name: config.SHEETS.REJECTED_LOG, col: 10 }
   ];
+  if (typeof SparkCore !== "undefined" && SparkCore.getIndexedFileIds) {
+    return SparkCore.getIndexedFileIds(ss, map);
+  }
+  const ids = new Set();
   map.forEach(item => {
     const sheet = ss.getSheetByName(item.name);
     if (sheet && sheet.getLastRow() > 1) {
@@ -669,47 +752,50 @@ function getIndexedFileIds(ss, config) {
   return ids;
 }
 
-
 /**
- * Returns primary parent folder ID of a Drive file
+ * Returns the primary parent folder ID of a Drive file.
+ * Delegates to SparkCore.DriveUtils.getPrimaryParentId.
  */
 function getPrimaryParentId(file) {
+  if (typeof SparkCore !== "undefined" && SparkCore.getPrimaryParentId) {
+    return SparkCore.getPrimaryParentId(file);
+  }
   const parents = file.getParents();
   return parents.hasNext() ? parents.next().getId() : 'root';
 }
 
-
 /**
- * Pre-filter check for excluded parent folder IDs (recursive up to 8 levels)
+ * Pre-filter check for excluded parent folder IDs.
+ * Delegates to SparkCore.DriveUtils.isFolderExcluded.
  */
 function isFolderExcluded(file, excludedFolderIds) {
+  if (typeof SparkCore !== "undefined" && SparkCore.isFolderExcluded) {
+    return SparkCore.isFolderExcluded(file, excludedFolderIds);
+  }
   if (!excludedFolderIds || excludedFolderIds.length === 0) return false;
-  let currentParents = file.getParents();
-  let depth = 0;
-  const maxDepth = 8;
-  while (currentParents.hasNext() && depth < maxDepth) {
-    const parentFolder = currentParents.next();
-    const parentId = parentFolder.getId();
-    if (excludedFolderIds.includes(parentId)) return true;
-    currentParents = parentFolder.getParents();
-    depth++;
+  const parents = file.getParents();
+  while (parents.hasNext()) {
+    const parent = parents.next();
+    if (excludedFolderIds.indexOf(parent.getId()) !== -1) return true;
   }
   return false;
 }
 
-
 /**
- * Pre-filter check for excluded title keywords
+ * Pre-filter check for excluded title keywords.
+ * Delegates to SparkCore.DriveUtils.isTitleExcluded.
  */
 function isTitleExcluded(title, keywords) {
+  if (typeof SparkCore !== "undefined" && SparkCore.isTitleExcluded) {
+    return SparkCore.isTitleExcluded(title, keywords);
+  }
   if (!keywords || keywords.length === 0) return false;
   const lower = title.toLowerCase();
   return keywords.some(k => lower.includes(k));
 }
 
-
 /**
- * Extracts raw prose from Google Docs, Slides, MS Office (.docx, .pptx), ODT, or plain text/markdown files
+ * Extracts raw prose from Google Docs, Slides, or plain text/markdown files up to character limit
  */
 function extractFileText(file, maxLength) {
   try {
@@ -724,24 +810,6 @@ function extractFileText(file, maxLength) {
           if (shape.getText()) text += shape.getText().asString() + '\n';
         });
       });
-    } else if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || mime === 'application/msword') {
-      const blobs = Utilities.unzip(file.getBlob());
-      const docXml = blobs.find(b => b.getName() === 'word/document.xml');
-      if (docXml) {
-        text = docXml.getDataAsString().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-      }
-    } else if (mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
-      const blobs = Utilities.unzip(file.getBlob());
-      const slideXmls = blobs.filter(b => /^ppt\/slides\/slide\d+\.xml$/i.test(b.getName()));
-      slideXmls.forEach(b => {
-        text += b.getDataAsString().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ') + '\n';
-      });
-    } else if (mime === 'application/vnd.oasis.opendocument.text') {
-      const blobs = Utilities.unzip(file.getBlob());
-      const contentXml = blobs.find(b => b.getName() === 'content.xml');
-      if (contentXml) {
-        text = contentXml.getDataAsString().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-      }
     } else {
       text = file.getBlob().getDataAsString();
     }
@@ -752,7 +820,6 @@ function extractFileText(file, maxLength) {
   }
 }
 
-
 /**
  * Counts words in extracted text
  */
@@ -761,9 +828,8 @@ function countWords(text) {
   return text.trim().split(/\s+/).length;
 }
 
-
 /**
- * Per-folder auto-discovery rule: excludes a non-root parent folder when it reaches >= 3 rejections
+ * Per-folder auto-discovery rule: excludes a non-root parent folder only when that specific folder reaches >= 3 rejections
  */
 function autoDiscoverExclusion(ss, parentId, pendingRejectedRows) {
   if (!parentId || parentId === 'root') return;
@@ -772,13 +838,12 @@ function autoDiscoverExclusion(ss, parentId, pendingRejectedRows) {
     if (parentId === rootId) return;
   } catch (e) {}
 
-
   const marker = '[FolderID:' + parentId + ']';
   let folderRejectionCount = 0;
+
   (pendingRejectedRows || []).forEach(r => {
     if (String(r[10] || '').includes(marker)) folderRejectionCount++;
   });
-
 
   const rejectedSheet = ss.getSheetByName(DEFAULT_CONFIG.SHEETS.REJECTED_LOG);
   if (rejectedSheet && rejectedSheet.getLastRow() > 1) {
@@ -789,7 +854,6 @@ function autoDiscoverExclusion(ss, parentId, pendingRejectedRows) {
       }
     }
   }
-
 
   if (folderRejectionCount >= 3) {
     const configSheet = ss.getSheetByName(DEFAULT_CONFIG.SHEETS.SYSTEM_CONFIG);
@@ -810,66 +874,17 @@ function autoDiscoverExclusion(ss, parentId, pendingRejectedRows) {
   }
 }
 
-
-/**
- * Discovers available Gemini models dynamically via v1beta API and performs upfront quota tracking
- */
-function getDynamicModelHierarchy(apiKey, config) {
-  config = config || DEFAULT_CONFIG;
-  const scriptProps = PropertiesService.getScriptProperties();
-  const now = Date.now();
-  const pattern = config.PREFERRED_MODEL_PATTERN || 'flash';
-  try {
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models?key=' + apiKey;
-    const res = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) {
-      Logger.log('Model discovery HTTP ' + res.getResponseCode() + ', falling back to default.');
-      return [config.GEMINI_MODEL || 'gemini-2.5-flash'];
-    }
-    const modelsList = JSON.parse(res.getContentText()).models || [];
-    const validModels = modelsList
-      .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-      .map(m => (m.name || '').replace(/^models\//, ''))
-      .filter(name => name.toLowerCase().includes('gemini'));
-    validModels.sort((a, b) => {
-      const aPref = a.toLowerCase().includes(pattern) ? 1 : 0;
-      const bPref = b.toLowerCase().includes(pattern) ? 1 : 0;
-      if (aPref !== bPref) return bPref - aPref;
-      return b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' });
-    });
-    const availableModels = validModels.filter(model => {
-      const quotaUntil = scriptProps.getProperty('QUOTA_EXHAUSTED_UNTIL_' + model);
-      if (quotaUntil && Number(quotaUntil) > now) {
-        Logger.log('[QUOTA SKIP] Model ' + model + ' paused until: ' + new Date(Number(quotaUntil)).toISOString());
-        return false;
-      }
-      return true;
-    });
-    return availableModels.length > 0 ? availableModels : [config.GEMINI_MODEL || 'gemini-2.5-flash'];
-  } catch (err) {
-    Logger.log('Error in getDynamicModelHierarchy: ' + err.toString());
-    return [config.GEMINI_MODEL || 'gemini-2.5-flash'];
-  }
-}
-
-
 /**
  * Structural classification via Gemini API with Structured JSON Schema output (including Rule 1 GenAI check)
  */
 function classifySampleWithGemini(textContent, documentTitle, config) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) throw new Error('GEMINI_API_KEY script property missing');
-  const scriptProps = PropertiesService.getScriptProperties();
-  const candidateModels = (config.MODEL_SELECTION_MODE === 'DYNAMIC')
-    ? getDynamicModelHierarchy(apiKey, config)
-    : [config.GEMINI_MODEL || 'gemini-2.5-flash'];
-
 
   const systemInstruction =
     "You are an expert editorial taxonomist curating Wryen Meek's human-authored Writing Style & Tone Reference Index. " +
     "First, determine if the text is an AI-generated artifact (e.g., Gemini Deep Research whitepaper, LLM-generated system spec, or automated transcript). " +
     "Second, categorize Audience, Topic, Style, and Tone, and extract a verbatim exemplary quote strictly under 35 words.";
-
 
   const jsonSchema = {
     type: 'OBJECT',
@@ -892,7 +907,6 @@ function classifySampleWithGemini(textContent, documentTitle, config) {
     ]
   };
 
-
   const payload = {
     contents: [{ parts: [{ text: 'Document Title: ' + documentTitle + '\n\nText Sample:\n' + textContent }] }],
     systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -903,55 +917,16 @@ function classifySampleWithGemini(textContent, documentTitle, config) {
     }
   };
 
-
-  for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
-    const targetModel = candidateModels[mIdx];
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + targetModel + ':generateContent?key=' + apiKey;
-    let attempts = 0;
-    while (attempts < 2) {
-      attempts++;
-      const res = UrlFetchApp.fetch(url, {
-        method: 'post',
-        contentType: 'application/json',
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true
-      });
-      const code = res.getResponseCode();
-      if (code === 200) {
-        const json = JSON.parse(res.getContentText());
-        return JSON.parse(json.candidates[0].content.parts[0].text);
-      } else if (code === 429) {
-        const rawErr = res.getContentText();
-        let retryDelay = 0;
-        const match = rawErr.match(/retry(?:-after|Delay)?\s*[:'=]?\s*(\d+)/i);
-        if (match) retryDelay = parseInt(match[1], 10);
-        const isDailyQuota = rawErr.includes('GenerateRequestsPerDay') || rawErr.includes('PerDay') || retryDelay > 60;
-        if (isDailyQuota) {
-          const lockMs = retryDelay > 60 ? retryDelay * 1000 : 24 * 60 * 60 * 1000;
-          const lockUntil = Date.now() + lockMs;
-          scriptProps.setProperty('QUOTA_EXHAUSTED_UNTIL_' + targetModel, String(lockUntil));
-          Logger.log(`[QUOTA EXHAUSTED] Model ${targetModel} exceeded quota. Locked until ${new Date(lockUntil).toISOString()}. Cascading to next model.`);
-          break;
-        } else if (retryDelay <= 15 && attempts === 1) {
-          Logger.log(`[TRANSIENT 429] Rate limited on ${targetModel}. Pausing for ${retryDelay || 5}s before retry.`);
-          Utilities.sleep((retryDelay || 5) * 1000);
-          continue;
-        } else {
-          Logger.log(`[429 FAIL] Rate limit or quota error on ${targetModel}: ${rawErr}. Cascading.`);
-          break;
-        }
-      } else {
-        Logger.log(`[ERROR] Model ${targetModel} HTTP ${code}: ${res.getContentText()}. Cascading.`);
-        break;
-      }
-    }
+  const ladder = (config && config.MODEL_LADDER) ? config.MODEL_LADDER : (config && config.GEMINI_MODEL ? [config.GEMINI_MODEL] : DEFAULT_CONFIG.MODEL_LADDER);
+  const result = callGeminiAPI(payload, apiKey, ladder);
+  if (!result) {
+    throw new Error('All Gemini models in dynamic ladder failed or exhausted quota');
   }
-  throw new Error('All candidate Gemini models failed classification: ' + JSON.stringify(candidateModels));
+  return result;
 }
 
-
 /**
- * Syncs novel taxonomy values into Audiences, Topics, Styles, and Tones tabs
+ * Syncs novel taxonomy values into Audiences, Topics, Styles, and Tones tabs matching live column schemas
  */
 function syncTaxonomy(ss, config, classification, docTitle, docYear) {
   const specs = [
@@ -976,6 +951,7 @@ function syncTaxonomy(ss, config, classification, docTitle, docYear) {
       rowBuilder: v => [v, 'Attitudinal/emotional register identified during style index ingestion.']
     }
   ];
+
   specs.forEach(spec => {
     if (!spec.val) return;
     const sheet = ss.getSheetByName(spec.sheetName);
@@ -989,7 +965,6 @@ function syncTaxonomy(ss, config, classification, docTitle, docYear) {
   });
 }
 
-
 /**
  * Weekly job: Consolidates Review_Queue items into a single actionable Google Task
  */
@@ -998,6 +973,7 @@ function syncWeeklyReviewTasks() {
   const config = loadSystemConfig(ss);
   const reviewSheet = ss.getSheetByName(config.SHEETS.REVIEW_QUEUE);
   if (!reviewSheet || reviewSheet.getLastRow() <= 1) return;
+
   const rows = reviewSheet.getDataRange().getValues();
   const pending = [];
   for (let i = 1; i < rows.length; i++) {
@@ -1006,13 +982,22 @@ function syncWeeklyReviewTasks() {
     }
   }
   if (pending.length === 0) return;
+
+  const taskTitle = 'Weekly Writing Style Index Review (' + pending.length + ' Pending)';
+  let body = 'Review the following borderline or co-authored writing samples in Review_Queue:\n' + ss.getUrl() + '\n\n';
+  pending.slice(0, 15).forEach(p => {
+    body += '• ' + p.name + ' (Confidence: ' + (p.score * 100).toFixed(0) + '%)\n  ' + p.url + '\n';
+  });
+
+  if (typeof SparkCore !== "undefined" && SparkCore.createTaskAlert) {
+    SparkCore.createTaskAlert(taskTitle, body, { dueDays: 2 });
+    Logger.log('Created consolidated weekly Google Task for ' + pending.length + ' items.');
+    return;
+  }
+
   try {
     const task = Tasks.newTask();
-    task.title = 'Weekly Writing Style Index Review (' + pending.length + ' Pending)';
-    let body = 'Review the following borderline or co-authored writing samples in Review_Queue:\n' + ss.getUrl() + '\n\n';
-    pending.slice(0, 15).forEach(p => {
-      body += '• ' + p.name + ' (Confidence: ' + (p.score * 100).toFixed(0) + '%)\n  ' + p.url + '\n';
-    });
+    task.title = taskTitle;
     task.notes = body;
     const due = new Date();
     due.setDate(due.getDate() + 2);
@@ -1024,7 +1009,6 @@ function syncWeeklyReviewTasks() {
   }
 }
 
-
 /**
  * Monthly job: Uses Gemini API to perform semantic clustering on taxonomy terms and stages merge proposals
  */
@@ -1034,7 +1018,6 @@ function runMonthlyTaxonomyClustering() {
   const categories = [config.SHEETS.AUDIENCES, config.SHEETS.TOPICS, config.SHEETS.STYLES, config.SHEETS.TONES];
   const proposalsSheet = ss.getSheetByName(config.SHEETS.TAXONOMY_PROPOSALS);
 
-
   categories.forEach(cat => {
     const sheet = ss.getSheetByName(cat);
     if (!sheet || sheet.getLastRow() <= 1) return;
@@ -1043,7 +1026,7 @@ function runMonthlyTaxonomyClustering() {
     try {
       const prompt = 'Group near-synonyms or redundant terms in this list into clean canonical parent terms:\n' + JSON.stringify(terms);
       const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
-      const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + config.GEMINI_MODEL + ':generateContent?key=' + apiKey;
+      if (!apiKey) throw new Error('GEMINI_API_KEY script property missing');
       const schema = {
         type: 'ARRAY',
         items: {
@@ -1059,14 +1042,9 @@ function runMonthlyTaxonomyClustering() {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1 }
       };
-      const res = UrlFetchApp.fetch(url, {
-        method: 'post',
-        contentType: 'application/json',
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true
-      });
-      if (res.getResponseCode() === 200) {
-        const clusters = JSON.parse(JSON.parse(res.getContentText()).candidates[0].content.parts[0].text);
+      const ladder = (config && config.MODEL_LADDER) ? config.MODEL_LADDER : (config && config.GEMINI_MODEL ? [config.GEMINI_MODEL] : DEFAULT_CONFIG.MODEL_LADDER);
+      const clusters = callGeminiAPI(payload, apiKey, ladder);
+      if (clusters && Array.isArray(clusters)) {
         clusters.forEach(c => {
           if (c.mergedTerms && c.mergedTerms.length > 1) {
             proposalsSheet.appendRow([cat, c.canonicalTerm, c.mergedTerms.join(', '), 'PENDING_APPROVAL']);
@@ -1079,7 +1057,6 @@ function runMonthlyTaxonomyClustering() {
   });
 }
 
-
 /**
  * Writes evaluation record to Evals_Log tab for closed-loop feedback
  */
@@ -1089,12 +1066,19 @@ function logEvalRecord(ss, config, file, classification, actionType) {
   evalSheet.appendRow([new Date(), file.getName(), file.getId(), JSON.stringify(classification), '', actionType]);
 }
 
-
 /**
- * Error handler creating urgent Google Tasks and logging errors
+ * Error handler creating urgent Google Tasks and logging errors.
+ * Delegates to SparkCore.Harness.createTaskAlert.
  */
 function handleScriptError(ss, config, contextMessage, error) {
   Logger.log('CRITICAL: ' + contextMessage + ' | ' + error.toString());
+  if (typeof SparkCore !== "undefined" && SparkCore.createTaskAlert) {
+    SparkCore.createTaskAlert('URGENT System Alert: ' + contextMessage, 'System error occurred during Writing Style Index pipeline execution:\n\n' + error.toString(), {
+      dueIsoString: new Date().toISOString(),
+      fallbackEmail: (config && config.PRIMARY_USER_EMAIL) || DEFAULT_CONFIG.PRIMARY_USER_EMAIL
+    });
+    return;
+  }
   try {
     const task = Tasks.newTask();
     task.title = 'URGENT System Alert: ' + contextMessage;
@@ -1105,7 +1089,6 @@ function handleScriptError(ss, config, contextMessage, error) {
     Logger.log('Failed to dispatch alert Google Task: ' + e.toString());
   }
 }
-
 
 /**
  * Comprehensive test suite (Dry Run) verifying config, remediation, deduplication, regexes, Tasks API, and connectivity
@@ -1127,8 +1110,8 @@ function testDryRun() {
     const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
     if (apiKey) {
       Logger.log('[PASS] GEMINI_API_KEY script property is set.');
-      const activeModels = getDynamicModelHierarchy(apiKey, config);
-      Logger.log('[PASS] Dynamic Gemini model hierarchy discovered: ' + JSON.stringify(activeModels));
+      const ladder = getDynamicModelLadder(apiKey, config.MODEL_LADDER);
+      Logger.log('[PASS] Active model ladder: ' + ladder.join(' -> '));
     } else {
       Logger.log('[WARN] GEMINI_API_KEY script property is not set yet.');
     }
@@ -1139,4 +1122,99 @@ function testDryRun() {
   }
   Logger.log('--- DRY RUN COMPLETE ---');
 }
-Note on Dynamic Model Fallback: If the primary configured model encounters persistent quota limits, rate spikes, or availability issues, the system can dynamically fall back to secondary Gemini endpoints (such as gemini-1.5-flash or gemini-2.0-flash) specified in System_Config to ensure uninterrupted pipeline operation.
+
+/**
+ * Checks whether an HTTP 429 response is due to exceeding the daily quota (RPD)
+ * vs a transient per-minute rate limit (RPM).
+ * Delegates to SparkCore.GeminiFleet.isDailyQuotaError.
+ */
+function isDailyQuotaError(statusCode, responseText) {
+  if (typeof SparkCore !== "undefined" && SparkCore.isDailyQuotaError) {
+    return SparkCore.isDailyQuotaError(statusCode, responseText);
+  }
+  if (statusCode !== 429) return false;
+  if (!responseText) return false;
+  const text = responseText.toLowerCase();
+  return (
+    text.includes("per day") ||
+    text.includes("perday") ||
+    text.includes("requests per day") ||
+    text.includes("daily") ||
+    text.includes("free tier per day") ||
+    text.includes("quota exceeded for quota metric 'generatecontent requests' and limit 'generatecontent requests per day")
+  );
+}
+
+/**
+ * Calculates remaining seconds until the next UTC midnight (when Google AI Studio daily quotas reset).
+ * Delegates to SparkCore.GeminiFleet.getSecondsUntilUtcMidnight.
+ */
+function getSecondsUntilUtcMidnight() {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.getSecondsUntilUtcMidnight();
+  }
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
+  return Math.max(60, Math.floor((tomorrow.getTime() - now.getTime()) / 1000));
+}
+
+/**
+ * Marks a model as daily-exhausted across CacheService and ScriptProperties.
+ * Delegates to SparkCore.GeminiFleet.markModelDailyExhausted.
+ */
+function markModelDailyExhausted(model) {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.markModelDailyExhausted(model);
+  }
+}
+
+/**
+ * Checks if a model is currently flagged as having exceeded its daily quota limit.
+ * Delegates to SparkCore.GeminiFleet.isModelDailyExhausted.
+ */
+function isModelDailyExhausted(model) {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.isModelDailyExhausted(model);
+  }
+  return false;
+}
+
+/**
+ * Dynamically queries the Gemini API to discover all available models supporting generateContent.
+ * Delegates to SparkCore.discoverAvailableModels.
+ */
+function discoverAvailableModels(apiKey) {
+  if (typeof SparkCore !== "undefined" && SparkCore.discoverAvailableModels) {
+    return SparkCore.discoverAvailableModels(apiKey);
+  }
+  return DEFAULT_CONFIG.MODEL_LADDER;
+}
+
+/**
+ * Assembles the active dynamic model ladder.
+ * Delegates to SparkCore.GeminiFleet.getDynamicModelLadder.
+ */
+function getDynamicModelLadder(apiKey, configLadder) {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.getDynamicModelLadder(apiKey, configLadder);
+  }
+  return [];
+}
+
+/**
+ * Invokes the Gemini API via UrlFetchApp with dynamic fallback ladder and quota tracking.
+ * Delegates to SparkCore.callGeminiAPI.
+ */
+function callGeminiAPI(payload, apiKey, modelOrLadder, options) {
+  if (typeof SparkCore !== "undefined" && SparkCore.callGeminiAPI) {
+    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder, options);
+    if (res && res._modelUsed) {
+      Logger.log('[SUCCESS] Style classification succeeded using model: "' + res._modelUsed + '"');
+    }
+    return res;
+  }
+  return null;
+}
+```
+
+Note on Dynamic Model Fallback: If the primary configured model encounters persistent quota limits, rate spikes, or availability issues, the system can dynamically fall back to secondary Gemini endpoints (such as gemini-1.5-flash or gemini-2.0-flash) specified in System_Config to ensure uninterrupted pipeline operation.

@@ -76,6 +76,7 @@ All shared infrastructure resides in [`core/src/`](file:///Users/wryen/.gemini/a
 ### 3.2 Dynamic Gemini Model Fleet (`GeminiFleet.js`)
 - **Flash-First Prioritization:** Model ranking must prioritize fast, cost-effective Flash models (`gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3.5-flash`) before escalating to heavy reasoning tiers (`gemini-2.5-pro`, `gemini-4-argon`).
 - **Dynamic Model Discovery:** Actively query `GET /v1beta/models`, filtering out non-generative or specialized endpoints (`tts`, `image`, `lyria`, `transcribe`, `computer-use`, `embed`).
+- **Canonical Model Ladder Export:** Expose the centralized 18-tier priority ladder via `DEFAULT_MODEL_LADDER` and `getDynamicModelLadder(apiKey, configLadder)` on both `GeminiFleet` and `SparkCore`, providing a single point of truth across all sister pipelines.
 - **Canonical Model Naming:** Automatically strip any leading `models/` prefix from requested model strings to ensure URLs never construct invalid paths like `models/models/...`.
 - **Quota Separation (RPM vs. RPD):**
   - Transient HTTP 429 / 503 limits must trigger exponential backoff pauses (default: 1,500ms) and inline retries.
@@ -96,6 +97,9 @@ All shared infrastructure resides in [`core/src/`](file:///Users/wryen/.gemini/a
 - **Heap OOM Defense:** When extracting text snippets from multi-megabyte documents, pre-slice a character sampling window (`Math.max(1000, wordLimit * 30)`) before executing regex whitespace splitting, preventing Apps Script V8 heap exhaustion.
 - **25+ Character ID Extraction:** Use regex pattern `/([-\w]{25,})/` to reliably parse pure Google Drive File IDs from arbitrary URLs, sharing links, or raw ID strings.
 - **Bounded BFS Tree Crawling:** Implement recursive folder discovery with depth bounding, visited ID tracking, and execution time budget checks to guard against cyclic folder links.
+- **Parent ID & Hierarchy Filtering:** Provide `getPrimaryParentId(file)` and `isFolderExcluded(file, excludedFolderIds)` to verify folder membership against blacklists without repetitive `while(parents.hasNext())` boilerplate.
+- **Excluded Title Pre-Filtering:** Provide `isTitleExcluded(title, keywords)` for fast, zero-token regex/substring screening.
+- **Multi-Format Shape Extraction:** Support text extraction across Google Docs, text/markdown files, and Google Slides presentation shapes (`SlidesApp.openById`) within configured word limits.
 
 ### 3.5 Spreadsheet Hygiene & Injection Defense (`SheetKit.js`)
 - **Queue Deduplication:** Extract pending IDs from sheets before queuing to prevent unbounded duplicate queue growth.
@@ -105,10 +109,13 @@ All shared infrastructure resides in [`core/src/`](file:///Users/wryen/.gemini/a
   - Parse ISO date strings (`"2025-08-15"` -> `"2025"` or `"2025-08-15"`).
 - **Dynamic Grid Expansion:** Automatically expand both rows (`insertRowsAfter`) and columns (`insertColumnsAfter`) when appending data that exceeds existing spreadsheet boundaries.
 - **Formula Injection (CSV Injection) Sanitization:** Sanitize all string cell values by prefixing dangerous characters (`=`, `+`, `-`, `@`, `\t`, `\r`) with a single quote (`'`), ensuring untrusted file titles or LLM output cannot execute malicious spreadsheet formulas.
+- **In-Place Column Hygiene:** Provide `deduplicateRowsByColumn(sheet, colIndex, options)` to remove duplicate rows from bottom to top, `normalizeDateColumn(sheet, colIndex, options)` for in-place date cleaning, and `backfillEmptyCells(sheet, targetColIndex, options)` for taxonomy backfills.
 
-### 3.6 Execution Supervisor (`Harness.js`)
+### 3.6 Execution Supervisor & Trigger Lifecycle (`Harness.js`)
 - **Runtime Budget Supervisor:** Monitor execution time against Google's hard 6-minute cutoff (default budget: 240,000ms), allowing loops to exit cleanly, persist state checkpoints, and reschedule without script crashes.
-- **Safe Execution & Alerting:** Standardize `safeExecute` wrappers and formatted email alert dispatching for fatal pipeline failures.
+- **Idempotent Trigger Lifecycle Management:** Provide `clearTriggers(handlerNames)`, `installDailyTrigger(handlerName, hour, minute)`, `installIntervalTrigger(handlerName, intervalMinutes)`, and `installWeeklyTrigger(handlerName, dayOfWeek, hour)` to prevent stale or duplicate trigger accumulation across script redeployments.
+- **Consolidated Alerting & Notifications:** Standardize `createTaskAlert(title, notes, options)` for actionable Google Tasks creation with fallback email routing, and `sendEmailDigest(options)` for multi-recipient digest delivery.
+- **Safe Execution Wrapping:** Standardize `safeExecute` wrappers for resilient execution with default fallback return values.
 
 ---
 

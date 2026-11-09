@@ -76,7 +76,16 @@ function runDailyReceiptIngestion() {
   let processed2026 = 0;
   let totalAmountLogged = 0;
 
-  threads.forEach(thread => {
+  const budget = typeof SparkCore !== "undefined" && SparkCore.createExecutionBudget
+    ? SparkCore.createExecutionBudget(240000)
+    : null;
+
+  for (let t = 0; t < threads.length; t++) {
+    if (budget && budget.isTimeExpiring()) {
+      Logger.log('[BUDGET_EXPIRED] Execution time budget reaching limit. Halting receipt threads loop cleanly.');
+      break;
+    }
+    const thread = threads[t];
     const messages = thread.getMessages();
     let threadHandled = false;
     const threadSeenOrders = new Set();
@@ -147,7 +156,7 @@ function runDailyReceiptIngestion() {
     } else {
       thread.addLabel(reviewLabel);
     }
-  });
+  }
 
   Logger.log(
     `Ingestion Complete. 2025: ${processed2025}, 2026: ${processed2026}, Total Logged: $${totalAmountLogged.toFixed(2)}`
@@ -364,10 +373,14 @@ function extractReceiptMetadata(msg) {
 }
 
 /**
- * Saves vendor PDF attachment or creates a formatted native Google Doc in target Drive folder
+ * Saves vendor PDF attachment or creates a formatted native Google Doc in target Drive folder.
+ * Uses SparkCore.extractFileId for resilient folder resolution.
  */
 function archiveReceiptInDrive(msg, data, folderId) {
-  const folder = DriveApp.getFolderById(folderId);
+  const cleanFolderId = typeof SparkCore !== "undefined" && SparkCore.extractFileId
+    ? (SparkCore.extractFileId(folderId) || folderId)
+    : folderId;
+  const folder = DriveApp.getFolderById(cleanFolderId);
   const cleanMerchant = data.merchant.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_');
   const cleanOrder = data.orderId ? '_' + data.orderId.replace(/[^a-zA-Z0-9]/g, '') : '';
   const attachments = msg.getAttachments();
@@ -408,23 +421,31 @@ function archiveReceiptInDrive(msg, data, folderId) {
 }
 
 /**
- * Appends transaction row directly to the master inventory sheet (handling 2025 10-col vs 2026 8-col schemas)
+ * Appends transaction row directly to the master inventory sheet (handling 2025 10-col vs 2026 8-col schemas).
+ * Sanitizes untrusted text fields via SparkCore.SheetKit.sanitizeCellValue to defend against formula injection.
  */
 function appendRowToSheet(sheetId, filename, data) {
-  const ss = SpreadsheetApp.openById(sheetId);
+  const cleanSheetId = typeof SparkCore !== "undefined" && SparkCore.extractFileId
+    ? (SparkCore.extractFileId(sheetId) || sheetId)
+    : sheetId;
+  const ss = SpreadsheetApp.openById(cleanSheetId);
   const sheet = ss.getSheetByName(CONFIG.SHEETS.TAB_NAME) || ss.getSheets()[0];
+
+  const sanitize = typeof SparkCore !== "undefined" && SparkCore.sanitizeCellValue
+    ? SparkCore.sanitizeCellValue
+    : function(v) { return v; };
 
   if (data.year === 2025 || sheetId === CONFIG.SHEETS.INVENTORY_2025_ID) {
     // 2025 10-column reconciliation schema:
     // [Receipt Filename, Merchant / Issuer, Receipt Date, Receipt Amount, Payment Method, Matched Account, Reference / Order Details, Matched Tx Date, Matched Tx Amount, Status]
     sheet.appendRow([
-      filename,
-      data.merchant,
+      sanitize(filename),
+      sanitize(data.merchant),
       data.date,
       data.amount,
-      data.paymentMethod,
-      data.category,
-      data.orderId || data.description,
+      sanitize(data.paymentMethod),
+      sanitize(data.category),
+      sanitize(data.orderId || data.description),
       data.date,
       data.amount,
       'Unreconciled (Auto-Ingested)'
@@ -433,18 +454,18 @@ function appendRowToSheet(sheetId, filename, data) {
     // 2026 8-column expense schema:
     // [Receipt Filename, Merchant / Issuer, Date, Amount Paid ($), Payment Method, Category, Reference / Order IDs, Description / Items]
     sheet.appendRow([
-      filename,
-      data.merchant,
+      sanitize(filename),
+      sanitize(data.merchant),
       data.date,
       data.amount,
-      data.paymentMethod,
-      data.category,
-      data.orderId,
-      data.description
+      sanitize(data.paymentMethod),
+      sanitize(data.category),
+      sanitize(data.orderId),
+      sanitize(data.description)
     ]);
   }
 
-  Logger.log(`Appended to Sheet ${sheetId}: ${data.merchant} - $${data.amount.toFixed(2)}`);
+  Logger.log(`Appended to Sheet ${cleanSheetId}: ${data.merchant} - $${data.amount.toFixed(2)}`);
 }
 
 /**
@@ -460,9 +481,16 @@ function ensureLabelsExist() {
 }
 
 /**
- * Setup Function: Run once from Script Editor to install daily 8:30 AM Trigger
+ * Setup Function: Run once from Script Editor to install daily 8:30 AM Trigger.
+ * Delegates to SparkCore.Harness.installDailyTrigger.
  */
 function setupDailyTrigger() {
+  if (typeof SparkCore !== "undefined" && SparkCore.installDailyTrigger) {
+    SparkCore.installDailyTrigger('runDailyReceiptIngestion', 8, 30);
+    Logger.log('Daily 8:30 AM trigger installed successfully via SparkCore.');
+    return;
+  }
+
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     if (t.getHandlerFunction() === 'runDailyReceiptIngestion') {
