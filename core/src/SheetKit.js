@@ -237,6 +237,136 @@ var SheetKit = (function() {
     return appendedCount;
   }
 
+  /**
+   * Scans a specific column and deletes duplicate rows sharing the same identifier,
+   * deleting from bottom to top to preserve row indexing.
+   *
+   * @param {Sheet} sheet - SpreadsheetApp Sheet object
+   * @param {number} colIndex - 1-based column index
+   * @param {Object} [options] - Configuration options { startRow: 2, extractId: true }
+   * @returns {number} Number of duplicate rows deleted
+   */
+  function deduplicateRowsByColumn(sheet, colIndex, options) {
+    if (!sheet || typeof sheet.getLastRow !== "function") return 0;
+    options = options || {};
+    const startRow = typeof options.startRow === "number" ? options.startRow : 2;
+    const lastRow = sheet.getLastRow();
+    if (lastRow < startRow) return 0;
+
+    colIndex = typeof colIndex === "number" ? colIndex : 1;
+    const extractId = options.extractId !== false;
+    const numRows = lastRow - startRow + 1;
+    const values = sheet.getRange(startRow, colIndex, numRows, 1).getValues();
+
+    const seen = new Set();
+    const rowsToDelete = [];
+
+    for (let i = 0; i < values.length; i++) {
+      const raw = String(values[i][0] || "").trim();
+      if (!raw) continue;
+      let idKey = raw;
+      if (extractId) {
+        const match = raw.match(/([-\w]{25,})/);
+        if (match) idKey = match[1];
+      }
+      const actualRowIndex = startRow + i;
+      if (seen.has(idKey)) {
+        rowsToDelete.push(actualRowIndex);
+      } else {
+        seen.add(idKey);
+      }
+    }
+
+    if (typeof sheet.deleteRow === "function") {
+      for (let d = rowsToDelete.length - 1; d >= 0; d--) {
+        sheet.deleteRow(rowsToDelete[d]);
+      }
+    }
+
+    return rowsToDelete.length;
+  }
+
+  /**
+   * Cleans and normalizes all date or year cells in a column in place.
+   *
+   * @param {Sheet} sheet - SpreadsheetApp Sheet object
+   * @param {number} colIndex - 1-based column index
+   * @param {Object} [options] - Configuration options { startRow: 2, fullDate: false }
+   * @returns {number} Number of modified cells
+   */
+  function normalizeDateColumn(sheet, colIndex, options) {
+    if (!sheet || typeof sheet.getLastRow !== "function") return 0;
+    options = options || {};
+    const startRow = typeof options.startRow === "number" ? options.startRow : 2;
+    const lastRow = sheet.getLastRow();
+    if (lastRow < startRow) return 0;
+
+    colIndex = typeof colIndex === "number" ? colIndex : 1;
+    const fullDate = Boolean(options.fullDate);
+    const numRows = lastRow - startRow + 1;
+    const range = sheet.getRange(startRow, colIndex, numRows, 1);
+    const values = range.getValues();
+    let modifiedCount = 0;
+
+    for (let i = 0; i < values.length; i++) {
+      const current = values[i][0];
+      const cleaned = normalizeYearOrDateCell(current, fullDate);
+      if (cleaned !== "" && cleaned !== String(current)) {
+        values[i][0] = cleaned;
+        modifiedCount++;
+      }
+    }
+
+    if (modifiedCount > 0 && typeof range.setValues === "function") {
+      range.setValues(values);
+    }
+
+    return modifiedCount;
+  }
+
+  /**
+   * Backfills empty cells in targetColIndex based on terms present in keyColIndex.
+   *
+   * @param {Sheet} sheet - SpreadsheetApp Sheet object
+   * @param {number} targetColIndex - 1-based target column index
+   * @param {Object} [options] - Configuration options { startRow: 2, keyColIndex: 1, defaultValueFn: (keyVal) => string }
+   * @returns {number} Number of backfilled cells
+   */
+  function backfillEmptyCells(sheet, targetColIndex, options) {
+    if (!sheet || typeof sheet.getLastRow !== "function") return 0;
+    options = options || {};
+    const startRow = typeof options.startRow === "number" ? options.startRow : 2;
+    const lastRow = sheet.getLastRow();
+    if (lastRow < startRow) return 0;
+
+    targetColIndex = typeof targetColIndex === "number" ? targetColIndex : 2;
+    const keyColIndex = typeof options.keyColIndex === "number" ? options.keyColIndex : 1;
+    const defaultValueFn = typeof options.defaultValueFn === "function"
+      ? options.defaultValueFn
+      : function(term) { return "Default (" + term + ")"; };
+
+    const width = Math.max(targetColIndex, keyColIndex);
+    const numRows = lastRow - startRow + 1;
+    const range = sheet.getRange(startRow, 1, numRows, width);
+    const values = range.getValues();
+    let backfilledCount = 0;
+
+    for (let i = 0; i < values.length; i++) {
+      const keyVal = String(values[i][keyColIndex - 1] || "").trim();
+      const targetVal = String(values[i][targetColIndex - 1] || "").trim();
+      if (keyVal && !targetVal) {
+        values[i][targetColIndex - 1] = defaultValueFn(keyVal, startRow + i);
+        backfilledCount++;
+      }
+    }
+
+    if (backfilledCount > 0 && typeof range.setValues === "function") {
+      range.setValues(values);
+    }
+
+    return backfilledCount;
+  }
+
   return {
     sanitizeCellValue: sanitizeCellValue,
     normalizeYearOrDateCell: normalizeYearOrDateCell,
@@ -245,7 +375,10 @@ var SheetKit = (function() {
     getQueuedFileIds: getQueuedFileIds,
     getIndexedFileIds: getIndexedFileIds,
     applyApprovedTaxonomyMerges: applyApprovedTaxonomyMerges,
-    batchAppendRows: batchAppendRows
+    batchAppendRows: batchAppendRows,
+    deduplicateRowsByColumn: deduplicateRowsByColumn,
+    normalizeDateColumn: normalizeDateColumn,
+    backfillEmptyCells: backfillEmptyCells
   };
 })();
 

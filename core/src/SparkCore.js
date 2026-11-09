@@ -72,10 +72,30 @@ var SparkCore = (function() {
       if (!fleet) throw new ReferenceError("GeminiFleet subsystem is unavailable");
       return fleet.discoverAvailableModels(apiKey, options);
     },
+    getDynamicModelLadder: function(apiKey, configLadder) {
+      var fleet = _getFleet();
+      if (!fleet) throw new ReferenceError("GeminiFleet subsystem is unavailable");
+      return fleet.getDynamicModelLadder(apiKey, configLadder);
+    },
     isDailyQuotaError: function(statusCode, responseText) {
       var fleet = _getFleet();
       if (!fleet) throw new ReferenceError("GeminiFleet subsystem is unavailable");
       return fleet.isDailyQuotaError(statusCode, responseText);
+    },
+    isModelDailyExhausted: function(model) {
+      var fleet = _getFleet();
+      if (!fleet) throw new ReferenceError("GeminiFleet subsystem is unavailable");
+      return fleet.isModelDailyExhausted(model);
+    },
+    markModelDailyExhausted: function(model) {
+      var fleet = _getFleet();
+      if (!fleet) throw new ReferenceError("GeminiFleet subsystem is unavailable");
+      return fleet.markModelDailyExhausted(model);
+    },
+    getSecondsUntilUtcMidnight: function() {
+      var fleet = _getFleet();
+      if (!fleet) throw new ReferenceError("GeminiFleet subsystem is unavailable");
+      return fleet.getSecondsUntilUtcMidnight();
     },
 
     // Direct Convenience Facades: Drive Metadata
@@ -121,6 +141,21 @@ var SparkCore = (function() {
       if (!du) throw new ReferenceError("DriveUtils subsystem is unavailable");
       return du.extractFileTextSnippet(file, wordLimit);
     },
+    getPrimaryParentId: function(file) {
+      var du = _getDriveUtils();
+      if (!du) throw new ReferenceError("DriveUtils subsystem is unavailable");
+      return du.getPrimaryParentId(file);
+    },
+    isFolderExcluded: function(file, excludedFolderIds) {
+      var du = _getDriveUtils();
+      if (!du) throw new ReferenceError("DriveUtils subsystem is unavailable");
+      return du.isFolderExcluded(file, excludedFolderIds);
+    },
+    isTitleExcluded: function(title, keywords) {
+      var du = _getDriveUtils();
+      if (!du) throw new ReferenceError("DriveUtils subsystem is unavailable");
+      return du.isTitleExcluded(title, keywords);
+    },
 
     // Direct Convenience Facades: Sheet Kit
     sanitizeCellValue: function(val) {
@@ -163,6 +198,21 @@ var SparkCore = (function() {
       if (!sk) throw new ReferenceError("SheetKit subsystem is unavailable");
       return sk.batchAppendRows(sheet, rows, chunkSize);
     },
+    deduplicateRowsByColumn: function(sheet, colIndex, options) {
+      var sk = _getSheetKit();
+      if (!sk) throw new ReferenceError("SheetKit subsystem is unavailable");
+      return sk.deduplicateRowsByColumn(sheet, colIndex, options);
+    },
+    normalizeDateColumn: function(sheet, colIndex, options) {
+      var sk = _getSheetKit();
+      if (!sk) throw new ReferenceError("SheetKit subsystem is unavailable");
+      return sk.normalizeDateColumn(sheet, colIndex, options);
+    },
+    backfillEmptyCells: function(sheet, targetColIndex, options) {
+      var sk = _getSheetKit();
+      if (!sk) throw new ReferenceError("SheetKit subsystem is unavailable");
+      return sk.backfillEmptyCells(sheet, targetColIndex, options);
+    },
 
     // Direct Convenience Facades: Harness
     createExecutionBudget: function(maxRunTimeMs) {
@@ -179,10 +229,48 @@ var SparkCore = (function() {
       var harness = _getHarness();
       if (!harness) throw new ReferenceError("Harness subsystem is unavailable");
       return harness.safeExecute(contextName, fn, fallbackValue, options);
+    },
+    clearTriggers: function(handlerNames) {
+      var harness = _getHarness();
+      if (!harness) throw new ReferenceError("Harness subsystem is unavailable");
+      return harness.clearTriggers(handlerNames);
+    },
+    installDailyTrigger: function(handlerName, hour, minute) {
+      var harness = _getHarness();
+      if (!harness) throw new ReferenceError("Harness subsystem is unavailable");
+      return harness.installDailyTrigger(handlerName, hour, minute);
+    },
+    installIntervalTrigger: function(handlerName, intervalMinutes) {
+      var harness = _getHarness();
+      if (!harness) throw new ReferenceError("Harness subsystem is unavailable");
+      return harness.installIntervalTrigger(handlerName, intervalMinutes);
+    },
+    installWeeklyTrigger: function(handlerName, dayOfWeek, hour) {
+      var harness = _getHarness();
+      if (!harness) throw new ReferenceError("Harness subsystem is unavailable");
+      return harness.installWeeklyTrigger(handlerName, dayOfWeek, hour);
+    },
+    createTaskAlert: function(title, notes, options) {
+      var harness = _getHarness();
+      if (!harness) throw new ReferenceError("Harness subsystem is unavailable");
+      return harness.createTaskAlert(title, notes, options);
+    },
+    sendEmailDigest: function(options) {
+      var harness = _getHarness();
+      if (!harness) throw new ReferenceError("Harness subsystem is unavailable");
+      return harness.sendEmailDigest(options);
     }
   };
 
   // Modular Subsystem Property Getters
+  Object.defineProperty(core, "DEFAULT_MODEL_LADDER", {
+    get: function() {
+      var fleet = _getFleet();
+      return fleet && fleet.DEFAULT_MODEL_LADDER ? fleet.DEFAULT_MODEL_LADDER.slice() : [];
+    },
+    enumerable: true,
+    configurable: true
+  });
   Object.defineProperty(core, "GeminiFleet", {
     get: function() { return _getFleet(); },
     enumerable: true,

@@ -453,9 +453,16 @@ function ensureLabelsExist() {
 }
 
 /**
- * Setup Function: Run once from Script Editor to install daily 8:30 AM Trigger
+ * Setup Function: Run once from Script Editor to install daily 8:30 AM Trigger.
+ * Delegates to SparkCore.Harness.installDailyTrigger.
  */
 function setupDailyTrigger() {
+  if (typeof SparkCore !== "undefined" && SparkCore.installDailyTrigger) {
+    SparkCore.installDailyTrigger('runDailyReceiptIngestion', 8, 30);
+    Logger.log('Daily 8:30 AM trigger installed successfully via SparkCore.');
+    return;
+  }
+
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     if (t.getHandlerFunction() === 'runDailyReceiptIngestion') {

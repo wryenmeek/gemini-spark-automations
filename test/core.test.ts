@@ -556,6 +556,66 @@ describe("SparkCore — Shared Library Test Suite", () => {
       expect(snippet).toContain("The quick brown fox jumps");
       expect(snippet).toContain("[TRUNCATED at 5 words]");
     });
+
+    test("DriveUtils hierarchy helpers filter excluded folders, titles, and resolve parent IDs", () => {
+      const { context } = loadCoreContext();
+      const du = context.DriveUtils;
+
+      // getPrimaryParentId & isFolderExcluded
+      const createMockFile = (parentId: string) => ({
+        getParents: () => {
+          let hasNext = true;
+          return {
+            hasNext: () => hasNext,
+            next: () => {
+              hasNext = false;
+              return { getId: () => parentId };
+            },
+          };
+        },
+      });
+
+      const mockFileWithParent = createMockFile("folder_abc");
+      expect(du.getPrimaryParentId(mockFileWithParent)).toBe("folder_abc");
+      expect(du.getPrimaryParentId(null)).toBe("root");
+      expect(du.getPrimaryParentId({ getParents: () => ({ hasNext: () => false }) })).toBe("root");
+
+      // isFolderExcluded
+      expect(du.isFolderExcluded(createMockFile("folder_abc"), ["folder_xyz", "folder_abc"])).toBe(true);
+      expect(du.isFolderExcluded(createMockFile("folder_abc"), ["folder_xyz"])).toBe(false);
+      expect(du.isFolderExcluded(null, ["folder_abc"])).toBe(false);
+
+      // isTitleExcluded
+      expect(du.isTitleExcluded("Receipt_2026_01.pdf", ["receipt", "invoice"])).toBe(true);
+      expect(du.isTitleExcluded("Quarterly_Report.docx", ["receipt", "invoice"])).toBe(false);
+      expect(du.isTitleExcluded("", ["receipt"])).toBe(false);
+    });
+
+    test("extractFileTextSnippet handles Google Slides shapes extraction", () => {
+      const mockSlide = {
+        getId: () => "pres_1",
+        getMimeType: () => "application/vnd.google-apps.presentation",
+      };
+
+      const { context } = loadCoreContext({
+        SlidesApp: {
+          openById: (_id: string) => ({
+            getSlides: () => [
+              {
+                getShapes: () => [
+                  { getText: () => ({ asString: () => "Welcome to Slide 1" }) },
+                  { getText: () => ({ asString: () => "Key Architecture Objectives" }) },
+                ],
+              },
+            ],
+          }),
+        },
+      });
+
+      const text = context.DriveUtils.extractFileTextSnippet(mockSlide, 10);
+      expect(text).toContain("Welcome to Slide 1");
+      expect(text).toContain("Key Architecture Objectives");
+    });
   });
 
   // -------------------------------------------------------------
@@ -664,6 +724,78 @@ describe("SparkCore — Shared Library Test Suite", () => {
       expect(appendedRanges[2].startRow).toBe(17);
       expect(appendedRanges[2].vals.length).toBe(2);
     });
+
+    test("deduplicateRowsByColumn removes duplicate rows by extracted ID from bottom to top", () => {
+      const deletedRowIndices: number[] = [];
+      const mockSheet = {
+        getLastRow: () => 5,
+        deleteRow: (idx: number) => {
+          deletedRowIndices.push(idx);
+        },
+        getRange: (_startRow: number, _col: number, _numRows: number, _numCols: number) => ({
+          getValues: () => [
+            ["https://docs.google.com/document/d/1HPY3pKrgzeJr1FMLiK_UNyNJcfPTanJoPRL3ikF_nA8/edit"], // row 2: ID 1
+            ["https://docs.google.com/document/d/1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA/edit"], // row 3: ID 2
+            ["https://docs.google.com/document/d/1HPY3pKrgzeJr1FMLiK_UNyNJcfPTanJoPRL3ikF_nA8/view"], // row 4: duplicate ID 1
+            ["https://docs.google.com/document/d/1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA/edit"], // row 5: duplicate ID 2
+          ],
+        }),
+      };
+
+      const { context } = loadCoreContext();
+      const deletedCount = context.SheetKit.deduplicateRowsByColumn(mockSheet, 1, { startRow: 2, extractId: true });
+      expect(deletedCount).toBe(2);
+      // Deletions must occur bottom-to-top (row 5, then row 4)
+      expect(deletedRowIndices).toEqual([5, 4]);
+    });
+
+    test("normalizeDateColumn and backfillEmptyCells perform in-place column hygiene", () => {
+      let updatedDates: any[][] = [];
+      const mockDateSheet = {
+        getLastRow: () => 4,
+        getRange: (_r: number, _c: number, _nr: number, _nc: number) => ({
+          getValues: () => [
+            ["2025.0"],
+            ["46241.0"],
+            ["2024"],
+          ],
+          setValues: (v: any[][]) => {
+            updatedDates = v;
+          },
+        }),
+      };
+
+      const { context } = loadCoreContext();
+      const count = context.SheetKit.normalizeDateColumn(mockDateSheet, 1, { startRow: 2, fullDate: false });
+      expect(count).toBe(2);
+      expect(updatedDates).toEqual([["2025"], ["2026"], ["2024"]]);
+
+      // backfillEmptyCells
+      let updatedBackfills: any[][] = [];
+      const mockBackfillSheet = {
+        getLastRow: () => 3,
+        getRange: (_r: number, _c: number, _nr: number, _nc: number) => ({
+          getValues: () => [
+            ["Leadership", ""],
+            ["Engineering", "Existing Description"],
+          ],
+          setValues: (v: any[][]) => {
+            updatedBackfills = v;
+          },
+        }),
+      };
+
+      const backfillCount = context.SheetKit.backfillEmptyCells(mockBackfillSheet, 2, {
+        startRow: 2,
+        keyColIndex: 1,
+        defaultValueFn: (term: string) => `Subject domain for ${term}`,
+      });
+      expect(backfillCount).toBe(1);
+      expect(updatedBackfills).toEqual([
+        ["Leadership", "Subject domain for Leadership"],
+        ["Engineering", "Existing Description"],
+      ]);
+    });
   });
 
   // -------------------------------------------------------------
@@ -727,6 +859,111 @@ describe("SparkCore — Shared Library Test Suite", () => {
       );
       expect(failed).toBe(-1);
     });
+
+    test("Harness trigger management methods clear and install triggers idempotently", () => {
+      let deletedTriggers: any[] = [];
+      let installedTrigger: any = null;
+
+      const mockTriggers = [
+        { getHandlerFunction: () => "handlerA" },
+        { getHandlerFunction: () => "handlerB" },
+      ];
+
+      const { context } = loadCoreContext({
+        ScriptApp: {
+          getProjectTriggers: () => mockTriggers,
+          deleteTrigger: (t: any) => {
+            deletedTriggers.push(t);
+          },
+          newTrigger: (handler: string) => ({
+            timeBased: () => ({
+              everyDays: (_days: number) => ({
+                atHour: (h: number) => ({
+                  nearMinute: (m: number) => ({
+                    create: () => {
+                      installedTrigger = { type: "daily", handler, hour: h, minute: m };
+                      return installedTrigger;
+                    },
+                  }),
+                }),
+              }),
+              everyMinutes: (mins: number) => ({
+                create: () => {
+                  installedTrigger = { type: "interval", handler, intervalMinutes: mins };
+                  return installedTrigger;
+                },
+              }),
+              onWeekDay: (day: any) => ({
+                atHour: (h: number) => ({
+                  create: () => {
+                    installedTrigger = { type: "weekly", handler, day, hour: h };
+                    return installedTrigger;
+                  },
+                }),
+              }),
+            }),
+          }),
+        },
+      });
+
+      const harness = context.Harness;
+
+      // clearTriggers
+      const cleared = harness.clearTriggers("handlerA");
+      expect(cleared).toBe(1);
+
+      // installDailyTrigger
+      harness.installDailyTrigger("dailyScan", 8, 30);
+      expect(installedTrigger).toEqual({ type: "daily", handler: "dailyScan", hour: 8, minute: 30 });
+
+      // installIntervalTrigger
+      harness.installIntervalTrigger("crawlLoop", 15);
+      expect(installedTrigger).toEqual({ type: "interval", handler: "crawlLoop", intervalMinutes: 15 });
+
+      // installWeeklyTrigger
+      harness.installWeeklyTrigger("weeklyDigest", "MONDAY", 9);
+      expect(installedTrigger).toEqual({ type: "weekly", handler: "weeklyDigest", day: "MONDAY", hour: 9 });
+    });
+
+    test("createTaskAlert and sendEmailDigest dispatch tasks and emails safely", () => {
+      let taskInserted: any = null;
+      let emailDispatched: any = null;
+
+      const { context } = loadCoreContext({
+        Tasks: {
+          newTask: () => ({}),
+          Tasks: {
+            insert: (task: any, listId: string) => {
+              taskInserted = { task, listId };
+              return task;
+            },
+          },
+        },
+        GmailApp: {
+          sendEmail: (to: string, subj: string, body: string, opts: any) => {
+            emailDispatched = { to, subj, body, opts };
+          },
+        },
+      });
+
+      const harness = context.Harness;
+
+      // createTaskAlert
+      const task = harness.createTaskAlert("Urgent Task", "Check queue immediately", { dueDays: 2 });
+      expect(task).toBeDefined();
+      expect(taskInserted.task.title).toBe("Urgent Task");
+      expect(taskInserted.task.notes).toBe("Check queue immediately");
+
+      // sendEmailDigest
+      const sent = harness.sendEmailDigest({
+        recipient: "user@example.com",
+        subject: "Review Digest",
+        body: "3 items pending review",
+      });
+      expect(sent).toBe(true);
+      expect(emailDispatched.to).toBe("user@example.com");
+      expect(emailDispatched.subj).toBe("Review Digest");
+    });
   });
 
   // -------------------------------------------------------------
@@ -744,14 +981,34 @@ describe("SparkCore — Shared Library Test Suite", () => {
       expect(sc.SheetKit).toBeDefined();
       expect(sc.Harness).toBeDefined();
 
+      // Check model ladder property getter
+      expect(Array.isArray(sc.DEFAULT_MODEL_LADDER)).toBe(true);
+      expect(sc.DEFAULT_MODEL_LADDER.length).toBe(18);
+      expect(sc.DEFAULT_MODEL_LADDER[0]).toBe("gemini-2.5-flash");
+
       // Check direct convenience methods
       expect(typeof sc.callGeminiAPI).toBe("function");
       expect(typeof sc.discoverAvailableModels).toBe("function");
+      expect(typeof sc.getDynamicModelLadder).toBe("function");
+      expect(typeof sc.isModelDailyExhausted).toBe("function");
+      expect(typeof sc.markModelDailyExhausted).toBe("function");
       expect(typeof sc.parseMetadata).toBe("function");
       expect(typeof sc.formatMetadata).toBe("function");
       expect(typeof sc.extractFileId).toBe("function");
+      expect(typeof sc.getPrimaryParentId).toBe("function");
+      expect(typeof sc.isFolderExcluded).toBe("function");
+      expect(typeof sc.isTitleExcluded).toBe("function");
       expect(typeof sc.normalizeYearOrDateCell).toBe("function");
+      expect(typeof sc.deduplicateRowsByColumn).toBe("function");
+      expect(typeof sc.normalizeDateColumn).toBe("function");
+      expect(typeof sc.backfillEmptyCells).toBe("function");
       expect(typeof sc.createExecutionBudget).toBe("function");
+      expect(typeof sc.clearTriggers).toBe("function");
+      expect(typeof sc.installDailyTrigger).toBe("function");
+      expect(typeof sc.installIntervalTrigger).toBe("function");
+      expect(typeof sc.installWeeklyTrigger).toBe("function");
+      expect(typeof sc.createTaskAlert).toBe("function");
+      expect(typeof sc.sendEmailDigest).toBe("function");
     });
   });
 

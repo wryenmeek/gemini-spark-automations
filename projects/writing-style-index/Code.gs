@@ -7,26 +7,28 @@ const DEFAULT_CONFIG = {
   SPREADSHEET_ID: '1HPY3pKrgzeJr1FMLiK_UNyNJcfPTanJoPRL3ikF_nA8',
   PRIMARY_USER_EMAIL: 'wryenmeek@gmail.com',
   GEMINI_MODEL: 'gemini-2.5-flash',
-  MODEL_LADDER: [
-    "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
-    "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
-    "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
-    "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
-    "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
-    "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
-    "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
-    "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
-    "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
-    "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
-    "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
-    "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
-    "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
-    "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
-    "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
-    "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
-    "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
-    "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
-  ],
+  MODEL_LADDER: (typeof SparkCore !== "undefined" && SparkCore.DEFAULT_MODEL_LADDER && SparkCore.DEFAULT_MODEL_LADDER.length > 0)
+    ? SparkCore.DEFAULT_MODEL_LADDER
+    : [
+        "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
+        "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
+        "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
+        "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
+        "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
+        "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
+        "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
+        "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
+        "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
+        "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
+        "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
+        "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
+        "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
+        "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
+        "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
+        "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
+        "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
+        "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
+      ],
   CONFIDENCE_THRESHOLD: 0.90,
   MIN_WORD_COUNT: 150,
   MAX_TEXT_LENGTH: 8000,
@@ -66,11 +68,16 @@ function setupAllTriggers() {
     'runMonthlyTaxonomyClustering',
     'dailyStyleIndexUpdate'
   ];
-  ScriptApp.getProjectTriggers().forEach(t => {
-    if (handlers.includes(t.getHandlerFunction())) {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
+
+  if (typeof SparkCore !== "undefined" && SparkCore.clearTriggers) {
+    SparkCore.clearTriggers(handlers);
+  } else {
+    ScriptApp.getProjectTriggers().forEach(t => {
+      if (handlers.includes(t.getHandlerFunction())) {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+  }
 
   ScriptApp.newTrigger('scanAndIndexWritingSamples')
     .timeBased()
@@ -535,48 +542,57 @@ function remediateStyleIndexSheet(ss, config) {
   // 1. Clean Master Index dates & deduplicate by File ID
   const masterSheet = ss.getSheetByName(config.SHEETS.MASTER_INDEX);
   if (masterSheet && masterSheet.getLastRow() > 2) {
-    const rows = masterSheet.getDataRange().getValues();
-    const seenIds = new Set();
-    const duplicateRowIndices = [];
+    if (typeof SparkCore !== "undefined" && SparkCore.normalizeDateColumn && SparkCore.deduplicateRowsByColumn) {
+      SparkCore.normalizeDateColumn(masterSheet, 2, { startRow: 3, fullDate: false });
+      SparkCore.deduplicateRowsByColumn(masterSheet, 8, { startRow: 3, extractId: true });
+    } else {
+      const rows = masterSheet.getDataRange().getValues();
+      const seenIds = new Set();
+      const duplicateRowIndices = [];
 
-    for (let i = 2; i < rows.length; i++) {
-      const rawYear = rows[i][1];
-      const cleanYear = normalizeYearOrDateCell(rawYear);
-      if (cleanYear !== String(rawYear)) {
-        masterSheet.getRange(i + 1, 2).setValue(cleanYear);
-      }
+      for (let i = 2; i < rows.length; i++) {
+        const rawYear = rows[i][1];
+        const cleanYear = normalizeYearOrDateCell(rawYear);
+        if (cleanYear !== String(rawYear)) {
+          masterSheet.getRange(i + 1, 2).setValue(cleanYear);
+        }
 
-      const url = String(rows[i][7] || '').trim();
-      const match = url.match(/[-\w]{25,}/);
-      const idKey = match ? match[0] : url;
-      if (idKey && url.startsWith('http')) {
-        if (seenIds.has(idKey)) {
-          duplicateRowIndices.push(i + 1);
-        } else {
-          seenIds.add(idKey);
+        const url = String(rows[i][7] || '').trim();
+        const match = url.match(/[-\w]{25,}/);
+        const idKey = match ? match[0] : url;
+        if (idKey && url.startsWith('http')) {
+          if (seenIds.has(idKey)) {
+            duplicateRowIndices.push(i + 1);
+          } else {
+            seenIds.add(idKey);
+          }
         }
       }
-    }
 
-    for (let d = duplicateRowIndices.length - 1; d >= 0; d--) {
-      masterSheet.deleteRow(duplicateRowIndices[d]);
+      for (let d = duplicateRowIndices.length - 1; d >= 0; d--) {
+        masterSheet.deleteRow(duplicateRowIndices[d]);
+      }
     }
   }
 
   // 2. Clean Rejected Files Excel serial dates
   const rejectedSheet = ss.getSheetByName(config.SHEETS.REJECTED_LOG);
   if (rejectedSheet && rejectedSheet.getLastRow() > 1) {
-    const dateRange = rejectedSheet.getRange(2, 2, rejectedSheet.getLastRow() - 1, 1);
-    const dateVals = dateRange.getValues();
-    let changed = false;
-    for (let i = 0; i < dateVals.length; i++) {
-      const cleaned = normalizeYearOrDateCell(dateVals[i][0], true);
-      if (cleaned !== String(dateVals[i][0])) {
-        dateVals[i][0] = cleaned;
-        changed = true;
+    if (typeof SparkCore !== "undefined" && SparkCore.normalizeDateColumn) {
+      SparkCore.normalizeDateColumn(rejectedSheet, 2, { startRow: 2, fullDate: true });
+    } else {
+      const dateRange = rejectedSheet.getRange(2, 2, rejectedSheet.getLastRow() - 1, 1);
+      const dateVals = dateRange.getValues();
+      let changed = false;
+      for (let i = 0; i < dateVals.length; i++) {
+        const cleaned = normalizeYearOrDateCell(dateVals[i][0], true);
+        if (cleaned !== String(dateVals[i][0])) {
+          dateVals[i][0] = cleaned;
+          changed = true;
+        }
       }
+      if (changed) dateRange.setValues(dateVals);
     }
-    if (changed) dateRange.setValues(dateVals);
   }
 
   // 3. Backfill missing descriptions in Audiences, Topics, Styles, and Tones
@@ -682,17 +698,25 @@ function getIndexedFileIds(ss, config) {
 }
 
 /**
- * Returns the primary parent folder ID of a Drive file
+ * Returns the primary parent folder ID of a Drive file.
+ * Delegates to SparkCore.DriveUtils.getPrimaryParentId.
  */
 function getPrimaryParentId(file) {
+  if (typeof SparkCore !== "undefined" && SparkCore.getPrimaryParentId) {
+    return SparkCore.getPrimaryParentId(file);
+  }
   const parents = file.getParents();
   return parents.hasNext() ? parents.next().getId() : 'root';
 }
 
 /**
- * Pre-filter check for excluded parent folder IDs
+ * Pre-filter check for excluded parent folder IDs.
+ * Delegates to SparkCore.DriveUtils.isFolderExcluded.
  */
 function isFolderExcluded(file, excludedFolderIds) {
+  if (typeof SparkCore !== "undefined" && SparkCore.isFolderExcluded) {
+    return SparkCore.isFolderExcluded(file, excludedFolderIds);
+  }
   if (!excludedFolderIds || excludedFolderIds.length === 0) return false;
   const parents = file.getParents();
   while (parents.hasNext()) {
@@ -703,9 +727,13 @@ function isFolderExcluded(file, excludedFolderIds) {
 }
 
 /**
- * Pre-filter check for excluded title keywords
+ * Pre-filter check for excluded title keywords.
+ * Delegates to SparkCore.DriveUtils.isTitleExcluded.
  */
 function isTitleExcluded(title, keywords) {
+  if (typeof SparkCore !== "undefined" && SparkCore.isTitleExcluded) {
+    return SparkCore.isTitleExcluded(title, keywords);
+  }
   if (!keywords || keywords.length === 0) return false;
   const lower = title.toLowerCase();
   return keywords.some(k => lower.includes(k));
@@ -900,13 +928,21 @@ function syncWeeklyReviewTasks() {
   }
   if (pending.length === 0) return;
 
+  const taskTitle = 'Weekly Writing Style Index Review (' + pending.length + ' Pending)';
+  let body = 'Review the following borderline or co-authored writing samples in Review_Queue:\n' + ss.getUrl() + '\n\n';
+  pending.slice(0, 15).forEach(p => {
+    body += '• ' + p.name + ' (Confidence: ' + (p.score * 100).toFixed(0) + '%)\n  ' + p.url + '\n';
+  });
+
+  if (typeof SparkCore !== "undefined" && SparkCore.createTaskAlert) {
+    SparkCore.createTaskAlert(taskTitle, body, { dueDays: 2 });
+    Logger.log('Created consolidated weekly Google Task for ' + pending.length + ' items.');
+    return;
+  }
+
   try {
     const task = Tasks.newTask();
-    task.title = 'Weekly Writing Style Index Review (' + pending.length + ' Pending)';
-    let body = 'Review the following borderline or co-authored writing samples in Review_Queue:\n' + ss.getUrl() + '\n\n';
-    pending.slice(0, 15).forEach(p => {
-      body += '• ' + p.name + ' (Confidence: ' + (p.score * 100).toFixed(0) + '%)\n  ' + p.url + '\n';
-    });
+    task.title = taskTitle;
     task.notes = body;
     const due = new Date();
     due.setDate(due.getDate() + 2);
@@ -976,10 +1012,18 @@ function logEvalRecord(ss, config, file, classification, actionType) {
 }
 
 /**
- * Error handler creating urgent Google Tasks and logging errors
+ * Error handler creating urgent Google Tasks and logging errors.
+ * Delegates to SparkCore.Harness.createTaskAlert.
  */
 function handleScriptError(ss, config, contextMessage, error) {
   Logger.log('CRITICAL: ' + contextMessage + ' | ' + error.toString());
+  if (typeof SparkCore !== "undefined" && SparkCore.createTaskAlert) {
+    SparkCore.createTaskAlert('URGENT System Alert: ' + contextMessage, 'System error occurred during Writing Style Index pipeline execution:\n\n' + error.toString(), {
+      dueIsoString: new Date().toISOString(),
+      fallbackEmail: (config && config.PRIMARY_USER_EMAIL) || DEFAULT_CONFIG.PRIMARY_USER_EMAIL
+    });
+    return;
+  }
   try {
     const task = Tasks.newTask();
     task.title = 'URGENT System Alert: ' + contextMessage;

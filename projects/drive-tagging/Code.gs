@@ -5,27 +5,30 @@
 
 const CONFIG = {
   SPREADSHEET_ID: '1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA',
+  PRIMARY_USER_EMAIL: 'wryenmeek@gmail.com',
   GEMINI_MODEL: 'gemini-2.5-flash',
-  MODEL_LADDER: [
-    "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
-    "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
-    "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
-    "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
-    "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
-    "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
-    "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
-    "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
-    "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
-    "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
-    "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
-    "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
-    "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
-    "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
-    "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
-    "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
-    "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
-    "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
-  ],
+  MODEL_LADDER: (typeof SparkCore !== "undefined" && SparkCore.DEFAULT_MODEL_LADDER && SparkCore.DEFAULT_MODEL_LADDER.length > 0)
+    ? SparkCore.DEFAULT_MODEL_LADDER
+    : [
+        "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
+        "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
+        "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
+        "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
+        "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
+        "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
+        "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
+        "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
+        "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
+        "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
+        "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
+        "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
+        "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
+        "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
+        "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
+        "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
+        "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
+        "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
+      ],
   CONFIDENCE_THRESHOLD: 0.90, // Auto-approve if >= 0.90 and no new tags proposed
   BATCH_SIZE: 10,             // Max files processed per execution
   WORD_LIMIT: 1500,           // Max words sent to Gemini API for text/docs
@@ -41,11 +44,16 @@ function setupTaggingTriggers() {
     'syncApprovedTagsFromSheet',
     'sendWeeklyReviewDigest'
   ];
-  ScriptApp.getProjectTriggers().forEach(t => {
-    if (handlers.includes(t.getHandlerFunction())) {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
+
+  if (typeof SparkCore !== "undefined" && SparkCore.clearTriggers) {
+    SparkCore.clearTriggers(handlers);
+  } else {
+    ScriptApp.getProjectTriggers().forEach(t => {
+      if (handlers.includes(t.getHandlerFunction())) {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+  }
 
   ScriptApp.newTrigger('scanAndTagDriveFiles')
     .timeBased()
@@ -279,7 +287,11 @@ function sendWeeklyReviewDigest() {
       `Hello,\n\nYou have ${pendingCount} document(s) in your Google Drive pending tag review.\n\n` +
       `Please review and approve them here:\n${ss.getUrl()}\n\n` +
       `Best regards,\nDrive Tagging Automation`;
-    GmailApp.sendEmail(userEmail, subject, body);
+    if (typeof SparkCore !== "undefined" && SparkCore.sendEmailDigest) {
+      SparkCore.sendEmailDigest({ recipient: userEmail, subject: subject, body: body });
+    } else {
+      GmailApp.sendEmail(userEmail, subject, body);
+    }
   }
 }
 

@@ -168,6 +168,23 @@ var DriveUtils = (function() {
         if (typeof DocumentApp !== "undefined") {
           text = DocumentApp.openById(file.getId()).getBody().getText();
         }
+      } else if (
+        (typeof MimeType !== "undefined" && mime === MimeType.GOOGLE_SLIDES) ||
+        mime === "application/vnd.google-apps.presentation"
+      ) {
+        if (typeof SlidesApp !== "undefined") {
+          const pres = SlidesApp.openById(file.getId());
+          const slides = pres.getSlides();
+          const slideTexts = [];
+          for (let s = 0; s < slides.length; s++) {
+            const shapes = slides[s].getShapes();
+            for (let sh = 0; sh < shapes.length; sh++) {
+              const shapeText = shapes[sh].getText();
+              if (shapeText) slideTexts.push(shapeText.asString());
+            }
+          }
+          text = slideTexts.join("\n");
+        }
       } else if (mime === "application/pdf") {
         // Warning: Avoid getBlob().getDataAsString() on PDFs as it dumps unparsed binary streams.
         // Fall back cleanly to the file's name.
@@ -201,11 +218,67 @@ var DriveUtils = (function() {
     return text;
   }
 
+  /**
+   * Retrieves the primary parent folder ID of a Drive file, or returns 'root'.
+   *
+   * @param {File} file - DriveApp File instance
+   * @returns {string} Folder ID or 'root'
+   */
+  function getPrimaryParentId(file) {
+    if (!file || typeof file.getParents !== "function") return "root";
+    try {
+      const parents = file.getParents();
+      return parents && parents.hasNext() ? parents.next().getId() : "root";
+    } catch (_) {
+      return "root";
+    }
+  }
+
+  /**
+   * Checks whether a file resides within any of the excluded folder IDs.
+   *
+   * @param {File} file - DriveApp File instance
+   * @param {Array<string>} excludedFolderIds - List of folder IDs to skip
+   * @returns {boolean} True if any parent matches an excluded folder ID
+   */
+  function isFolderExcluded(file, excludedFolderIds) {
+    if (!excludedFolderIds || !Array.isArray(excludedFolderIds) || excludedFolderIds.length === 0) return false;
+    if (!file || typeof file.getParents !== "function") return false;
+    try {
+      const parents = file.getParents();
+      while (parents && parents.hasNext()) {
+        const parent = parents.next();
+        if (parent && excludedFolderIds.indexOf(parent.getId()) !== -1) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /**
+   * Checks whether a file or document title contains any blacklisted keywords (case-insensitive).
+   *
+   * @param {string} title - Document title or filename
+   * @param {Array<string>} keywords - Array of keyword substrings to reject
+   * @returns {boolean} True if title matches an excluded keyword
+   */
+  function isTitleExcluded(title, keywords) {
+    if (!title || !keywords || !Array.isArray(keywords) || keywords.length === 0) return false;
+    const lower = String(title).toLowerCase();
+    for (let i = 0; i < keywords.length; i++) {
+      const kw = String(keywords[i] || "").toLowerCase().trim();
+      if (kw && lower.includes(kw)) return true;
+    }
+    return false;
+  }
+
   return {
     extractFileId: extractFileId,
     createDocInFolder: createDocInFolder,
     crawlFolderTree: crawlFolderTree,
-    extractFileTextSnippet: extractFileTextSnippet
+    extractFileTextSnippet: extractFileTextSnippet,
+    getPrimaryParentId: getPrimaryParentId,
+    isFolderExcluded: isFolderExcluded,
+    isTitleExcluded: isTitleExcluded
   };
 })();
 

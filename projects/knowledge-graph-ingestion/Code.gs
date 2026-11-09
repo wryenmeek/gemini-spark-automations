@@ -20,26 +20,28 @@
 // Default configuration constants (overridable via Script Properties)
 const KG_DEFAULTS = {
   MODEL_NAME: "gemini-2.5-flash",
-  MODEL_LADDER: [
-    "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
-    "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
-    "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
-    "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
-    "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
-    "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
-    "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
-    "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
-    "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
-    "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
-    "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
-    "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
-    "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
-    "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
-    "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
-    "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
-    "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
-    "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
-  ],
+  MODEL_LADDER: (typeof SparkCore !== "undefined" && SparkCore.DEFAULT_MODEL_LADDER && SparkCore.DEFAULT_MODEL_LADDER.length > 0)
+    ? SparkCore.DEFAULT_MODEL_LADDER
+    : [
+        "gemini-2.5-flash",              // Tier 1: Primary workhorse (optimal extraction & reasoning)
+        "gemini-2.5-flash-lite",         // Tier 2: Separate high-speed rate-limit quota bucket
+        "gemini-flash-latest",          // Tier 3: Rolling latest production flash release
+        "gemini-flash-lite-latest",     // Tier 4: Rolling latest lite flash release
+        "gemini-3.5-flash",             // Tier 5: Next-gen 3.5 flash cluster
+        "gemini-3.5-flash-lite",        // Tier 6: Next-gen 3.5 lite cluster
+        "gemini-3.1-flash-lite",        // Tier 7: Gen 3.1 lite cluster
+        "gemini-3.1-flash-lite-preview",// Tier 8: Gen 3.1 preview cluster
+        "gemini-3-flash-preview",       // Tier 9: Gen 3 preview cluster
+        "gemini-3.6-flash",             // Tier 10: Gen 3.6 flash cluster
+        "gemini-3.7-flash",             // Tier 11: Gen 3.7 flash cluster
+        "gemini-3.8-flash",             // Tier 12: Gen 3.8 flash cluster
+        "gemini-omni-flash-preview",    // Tier 13: Omni multimodal preview cluster
+        "gemini-omni-1.1-flash",        // Tier 14: Omni 1.1 flash cluster
+        "gemini-2.5-pro",               // Tier 15: Deep reasoning pro cluster
+        "gemini-pro-latest",            // Tier 16: Rolling latest production pro release
+        "gemini-3.1-pro-preview",       // Tier 17: Gen 3.1 pro preview cluster
+        "gemini-4-argon"                // Tier 18: Advanced flagship frontier cluster
+      ],
   DEFAULT_SOURCE_FOLDER_ID: "1AYeQE47BeJdxwAAa3x5_Z2_hTmyq9NVz", // MCDM Archive
   DEFAULT_SEEDS_FOLDER_ID: "1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT",   // assets/seeds in MCDM_Archive_Knowledge_Graph
   BATCH_SIZE: 5,                                                   // Maximum files processed per trigger run
@@ -778,9 +780,14 @@ function testKGIngestionDryRun() {
 /**
  * Installs the recurring background time-driven trigger.
  * Deletes any existing triggers for runIngestionPipeline before creating a fresh 30-minute interval trigger.
+ * Delegates to SparkCore.Harness.installIntervalTrigger.
  */
 function setupKGTriggers() {
   const handler = 'runIngestionPipeline';
+  if (typeof SparkCore !== "undefined" && SparkCore.installIntervalTrigger) {
+    return SparkCore.installIntervalTrigger(handler, 30);
+  }
+
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === handler) {
       ScriptApp.deleteTrigger(t);

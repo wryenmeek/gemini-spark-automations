@@ -170,8 +170,8 @@ To support documents exceeding Google Apps Script limits (such as 100MB+ ruleboo
 
 ```mermaid
 flowchart LR
-    subgraph TS["TypeScript / Bun Suite (59 Tests)"]
-        CoreTest["test/core.test.ts<br><i>36 Unit Tests</i>"]
+    subgraph TS["TypeScript / Bun Suite (65 Tests)"]
+        CoreTest["test/core.test.ts<br><i>42 Unit Tests</i>"]
         AppsTest["test/apps_script.test.ts<br><i>23 Pipeline Tests</i>"]
         Typecheck["tsc --noEmit<br><i>Strict Static Typing</i>"]
     end
@@ -194,13 +194,13 @@ flowchart LR
 
 ### 6.1 Test Suite Breakdown
 1. **SparkCore Test Suite ([`test/core.test.ts`](file:///Users/wryen/.gemini/antigravity/scratch/gemini-spark-automations/test/core.test.ts)):**
-   - 36 comprehensive unit tests verifying CommonJS/TS module resolution, safety filter fast-exit, heap OOM sampling, quota tracking, formula injection escaping, column expansion, and tag trimming.
+   - 42 comprehensive unit tests verifying CommonJS/TS module resolution, safety filter fast-exit, heap OOM sampling, quota tracking, formula injection escaping, column expansion, tag trimming, trigger management, slide extraction, sheet hygiene, and task/email alerting.
 2. **Production Pipeline Regression Suite ([`test/apps_script.test.ts`](file:///Users/wryen/.gemini/antigravity/scratch/gemini-spark-automations/test/apps_script.test.ts)):**
    - 23 end-to-end simulated tests for receipt extraction, writing style delta indexing, drive tagging vision payloads, and knowledge graph Cypher generation.
 3. **Python Regression Suite ([`tests/python/`](file:///Users/wryen/.gemini/antigravity/scratch/gemini-spark-automations/tests/python)):**
    - 11 unit tests covering 4-token CLI parsing, subprocess timeout handling, partial upload failure marking, path traversal sanitization, and fail-closed folder creation.
 4. **Total Repository Test Coverage:**
-   - 59 automated Bun tests (36 unit + 23 pipeline) + 11 Pytest tests = 70 automated tests executed across local runs and CI.
+   - 65 automated Bun tests (42 unit + 23 pipeline) + 11 Pytest tests = 76 automated tests executed across local runs and CI.
 
 ### 6.2 CI Fail-Closed Guarantees
 - Continuous integration in [`.github/workflows/ci.yml`](file:///Users/wryen/.gemini/antigravity/scratch/gemini-spark-automations/.github/workflows/ci.yml) runs Python tests directly via `pytest -v tests/python` without skip conditions, ensuring tests cannot be silently bypassed.
