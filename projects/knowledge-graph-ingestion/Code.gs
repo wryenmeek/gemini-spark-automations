@@ -172,6 +172,13 @@ function runIngestionPipeline() {
   }
 
   const startTime = Date.now();
+  const budget = typeof SparkCore !== "undefined" && SparkCore.createExecutionBudget
+    ? SparkCore.createExecutionBudget(KG_DEFAULTS.MAX_RUNTIME_MS)
+    : {
+        isTimeExpiring: function() { return Date.now() - startTime > KG_DEFAULTS.MAX_RUNTIME_MS; },
+        getElapsedMs: function() { return Date.now() - startTime; }
+      };
+
   let processedCount = 0;
   let skippedCount = 0;
   const folderQueue = [sourceFolder];
@@ -179,8 +186,8 @@ function runIngestionPipeline() {
 
   while (folderQueue.length > 0 && processedCount < KG_DEFAULTS.BATCH_SIZE) {
     // Time-budget safety guard: exit cleanly before hitting Apps Script 6-minute hard timeout
-    if (Date.now() - startTime > KG_DEFAULTS.MAX_RUNTIME_MS) {
-      Logger.log(`[TIME BUDGET] Reached 4-minute execution threshold. Exiting cleanly to avoid timeout. Processed: ${processedCount}, Skipped: ${skippedCount}. Remaining files will be processed in the next scheduled execution.`);
+    if (budget.isTimeExpiring()) {
+      Logger.log(`[TIME BUDGET] Reached execution threshold (${(budget.getElapsedMs() / 1000).toFixed(1)}s). Exiting cleanly to avoid timeout. Processed: ${processedCount}, Skipped: ${skippedCount}. Remaining files will be processed in the next scheduled execution.`);
       break;
     }
 
@@ -265,7 +272,7 @@ function runIngestionPipeline() {
     }
 
     // 2. Discover and enqueue child subfolders
-    if (processedCount < KG_DEFAULTS.BATCH_SIZE && (Date.now() - startTime < KG_DEFAULTS.MAX_RUNTIME_MS)) {
+    if (processedCount < KG_DEFAULTS.BATCH_SIZE && !budget.isTimeExpiring()) {
       try {
         if (currentFolder.getFolders) {
           const subFolders = currentFolder.getFolders();
@@ -606,9 +613,9 @@ function getDynamicModelLadder(apiKey, configLadder) {
  * and Exponential Backoff.
  * Delegates to SparkCore.callGeminiAPI.
  */
-function callGeminiAPI(payload, apiKey, modelOrLadder) {
+function callGeminiAPI(payload, apiKey, modelOrLadder, options) {
   if (typeof SparkCore !== "undefined" && SparkCore.callGeminiAPI) {
-    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder);
+    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder, options);
     if (res && res._modelUsed) {
       Logger.log('[SUCCESS] Extracted graph entities using model: "' + res._modelUsed + '"');
     }

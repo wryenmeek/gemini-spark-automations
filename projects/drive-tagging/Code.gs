@@ -124,7 +124,15 @@ function scanAndTagDriveFiles() {
 
   let processedCount = 0;
 
+  const budget = typeof SparkCore !== "undefined" && SparkCore.createExecutionBudget
+    ? SparkCore.createExecutionBudget(240000)
+    : null;
+
   while (files.hasNext() && processedCount < CONFIG.BATCH_SIZE) {
+    if (budget && budget.isTimeExpiring()) {
+      Logger.log('[BUDGET_EXPIRED] Execution runtime budget limit reached (' + (budget.getElapsedMs() / 1000).toFixed(1) + 's). Halting drive scan safely.');
+      break;
+    }
     const file = files.next();
     const fileId = file.getId();
     const currentDescription = file.getDescription() || '';
@@ -423,9 +431,9 @@ function getDynamicModelLadder(apiKey, configLadder) {
  * and Exponential Backoff.
  * Delegates to SparkCore.callGeminiAPI.
  */
-function callGeminiAPI(payload, apiKey, modelOrLadder) {
+function callGeminiAPI(payload, apiKey, modelOrLadder, options) {
   if (typeof SparkCore !== "undefined" && SparkCore.callGeminiAPI) {
-    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder);
+    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder, options);
     if (res && res._modelUsed) {
       Logger.log('[SUCCESS] Extracted tags using model: "' + res._modelUsed + '"');
     }

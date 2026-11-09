@@ -22,8 +22,9 @@ Every system in `gemini-spark` strictly adheres to the **Documentation Triad** d
 
 ```mermaid
 flowchart TD
-    subgraph Gov["1. Architectural Governance & Standards"]
+    subgraph Gov["1. Architectural Governance & Shared Core"]
         Index["00_GEMINI_SPARK_INDEX<br><i>Master Systems Map</i>"]
+        SparkCore["SparkCore (core/)<br><i>Standalone Library v1.0.0</i>"]
         Rubric["Automation Decision Rubric<br><i>Apps Script vs Local Python</i>"]
         BestPractices["Automation Architecture Learnings<br><i>Governing Engineering Standard</i>"]
         Clasp["Clasp Setup & Workflow<br><i>CLI Deployment Standard</i>"]
@@ -73,6 +74,7 @@ flowchart TD
 | Category / System | Document Name in `gemini-spark` | Type | Document ID | Purpose / Target Asset |
 | :--- | :--- | :--- | :--- | :--- |
 | **0. Directory Index** | `00_GEMINI_SPARK_INDEX.md` | Google Doc | *(This Document)* | Single master table of contents and architecture map. |
+| **1. Governance** | [`SparkCore`](../core/) | Apps Script Library | `1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh` | Standalone core library v1.0.0 providing model fleet, metadata, drive, and sheet utilities. |
 | **1. Governance** | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Markdown | Repository Standard | System architecture, subsystem design requirements, and CI verification plan. |
 | **1. Governance** | [`Automation Decision Rubric - Apps Script vs Local Python.md`](https://docs.google.com/document/d/1XtL0AET8xsvXR0KHHGgRoo3-fucssnRabV35qUYp1xY/edit) | Google Doc | `1XtL0AET8xsvXR0KHHGgRoo3-fucssnRabV35qUYp1xY` | Execution rubric for Cloud Apps Script vs. Local Sandbox Python. |
 | **1. Governance** | [`Automation_Architecture_Learnings_and_Best_Practices.md`](https://docs.google.com/document/d/1HgCvM8q9A19BfYb4AosPTsU7ZLyJAYYFww3qhTDI-6c/edit) | Google Doc | `1HgCvM8q9A19BfYb4AosPTsU7ZLyJAYYFww3qhTDI-6c` | Canonical engineering baseline: traps, zero-token patterns, and standards. |
@@ -90,6 +92,7 @@ flowchart TD
 | **5. Entity Extraction** | [`Skill Resources - campaign-entity-extraction`](https://drive.google.com/drive/folders/1qrsATL6edhrjs3HsY_R73ekoJdBm3nNP) | Subfolder | `1qrsATL6edhrjs3HsY_R73ekoJdBm3nNP` | Python validator scripts, domain profiles, and meta-schema discovery docs. |
 | **6. Knowledge Graph** | [`Knowledge_Graph_Automation_Code.gs.md`](https://drive.google.com/file/d/1GXWpPDTaoj5MyWjZjstAhsMBU8JgmEmt/view) | Markdown | `1GXWpPDTaoj5MyWjZjstAhsMBU8JgmEmt` | BFS folder crawler, 18-model discovery ladder, idempotent OpenCypher generator. |
 | **6. Knowledge Graph** | [`Knowledge_Graph_QA_Procedures.md`](https://drive.google.com/file/d/10lj16vFN6ryN0UUDe62H0AgCXgbYCp6G/view) | Markdown | `10lj16vFN6ryN0UUDe62H0AgCXgbYCp6G` | QA checklists for graph entity vertices, relationships, and ArcadeDB seeds. |
+| **7. Offline Companion** | [`spark-wheels/`](../spark-wheels/) | Wheel Depot | Repository Directory | Offline Python wheel depot and airgapped distribution runbooks. |
 
 ---
 

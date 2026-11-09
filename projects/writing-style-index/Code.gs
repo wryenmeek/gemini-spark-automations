@@ -223,8 +223,16 @@ function scanAndIndexWritingSamples() {
   const todayStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   let processedInThisRun = 0;
 
+  const budget = typeof SparkCore !== "undefined" && SparkCore.createExecutionBudget
+    ? SparkCore.createExecutionBudget(config.MAX_RUN_TIME_MS || 240000)
+    : null;
+
   function processFileIterator(files) {
     while (files.hasNext() && processedInThisRun < config.BATCH_SIZE) {
+      if (budget && budget.isTimeExpiring()) {
+        Logger.log('[BUDGET_EXPIRED] Execution runtime budget limit reached (' + (budget.getElapsedMs() / 1000).toFixed(1) + 's). Halting scan safely.');
+        break;
+      }
       const file = files.next();
       const fileId = file.getId();
       if (existingFileIds.has(fileId)) continue;
@@ -1098,9 +1106,9 @@ function getDynamicModelLadder(apiKey, configLadder) {
  * Invokes the Gemini API via UrlFetchApp with dynamic fallback ladder and quota tracking.
  * Delegates to SparkCore.callGeminiAPI.
  */
-function callGeminiAPI(payload, apiKey, modelOrLadder) {
+function callGeminiAPI(payload, apiKey, modelOrLadder, options) {
   if (typeof SparkCore !== "undefined" && SparkCore.callGeminiAPI) {
-    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder);
+    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder, options);
     if (res && res._modelUsed) {
       Logger.log('[SUCCESS] Style classification succeeded using model: "' + res._modelUsed + '"');
     }
