@@ -73,6 +73,7 @@ flowchart TD
 | Category / System | Document Name in `gemini-spark` | Type | Document ID | Purpose / Target Asset |
 | :--- | :--- | :--- | :--- | :--- |
 | **0. Directory Index** | `00_GEMINI_SPARK_INDEX.md` | Google Doc | *(This Document)* | Single master table of contents and architecture map. |
+| **1. Governance** | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Markdown | Repository Standard | System architecture, subsystem design requirements, and CI verification plan. |
 | **1. Governance** | [`Automation Decision Rubric - Apps Script vs Local Python.md`](https://docs.google.com/document/d/1XtL0AET8xsvXR0KHHGgRoo3-fucssnRabV35qUYp1xY/edit) | Google Doc | `1XtL0AET8xsvXR0KHHGgRoo3-fucssnRabV35qUYp1xY` | Execution rubric for Cloud Apps Script vs. Local Sandbox Python. |
 | **1. Governance** | [`Automation_Architecture_Learnings_and_Best_Practices.md`](https://docs.google.com/document/d/1HgCvM8q9A19BfYb4AosPTsU7ZLyJAYYFww3qhTDI-6c/edit) | Google Doc | `1HgCvM8q9A19BfYb4AosPTsU7ZLyJAYYFww3qhTDI-6c` | Canonical engineering baseline: traps, zero-token patterns, and standards. |
 | **1. Governance** | [`Clasp_Setup_and_Development_Workflow.md`](https://docs.google.com/document/d/1gjhRmtCTUz6dAUx_O6s8PtCp4hMWlWkSZ2AiAwskutY/edit) | Google Doc | `1gjhRmtCTUz6dAUx_O6s8PtCp4hMWlWkSZ2AiAwskutY` | Standard operating procedure for CLI development via `@google/clasp`. |

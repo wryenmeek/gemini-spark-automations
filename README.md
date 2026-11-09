@@ -22,9 +22,12 @@ This repository contains the production source code, unit tests, clasp bindings,
 │   ├── drive-tagging/                        # Direct-to-storage Schema v1 JSONL drive classifier & tagger
 │   └── knowledge-graph-ingestion/            # Cypher seed generator & multimodal document extractor
 ├── docs/                                     # Engineering Specifications, SOPs & Governance Rubrics
+│   └── IMPLEMENTATION_PLAN.md                # System Architecture, Subsystem Requirements & CI Design
 ├── test/
-│   ├── core.test.ts                          # Comprehensive SparkCore unit tests (20 tests)
+│   ├── core.test.ts                          # Comprehensive SparkCore unit tests (59 tests)
 │   └── apps_script.test.ts                   # Production pipeline regression tests (23 tests)
+├── tests/
+│   └── python/                               # Python parser & prechunker unit tests (11 tests)
 └── deploy.sh                                 # Clasp multi-project build & deployment runner
 ```
 
