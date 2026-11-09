@@ -1,9 +1,9 @@
 # Quality Assurance & Validation Procedures: Semantic Knowledge Graph System
 
-**System Location:** Google Drive / `gemini-spark` & [`MCDM_Archive_Knowledge_Graph`](https://drive.google.com/drive/folders/1YECmZ3sMeAttBS2OTR_8WJaa_Bt5mO4b)  
-**Filename:** `Knowledge_Graph_QA_Procedures.md`  
-**Governing Standard:** `gemini-spark/Automation_Architecture_Learnings_and_Best_Practices.md`  
-**Effective Date:** October 30, 2026  
+**System Location:** Google Drive / `gemini-spark` & [`MCDM_Archive_Knowledge_Graph`](https://drive.google.com/drive/folders/1YECmZ3sMeAttBS2OTR_8WJaa_Bt5mO4b)
+**Filename:** `Knowledge_Graph_QA_Procedures.md`
+**Governing Standard:** `gemini-spark/Automation_Architecture_Learnings_and_Best_Practices.md`
+**Effective Date:** October 30, 2026
 
 ---
 

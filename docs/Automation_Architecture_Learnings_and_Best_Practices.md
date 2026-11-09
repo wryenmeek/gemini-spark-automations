@@ -1,10 +1,10 @@
 # Google Workspace Automation Architecture: Learnings, Patterns & Production Best Practices
 
-**Location:** `gemini-spark/Automation_Architecture_Learnings_and_Best_Practices.md`  
-**Governing Directory:** [`gemini-spark`](https://drive.google.com/drive/folders/1XQyRsEx8gQl8idUv_UhfRMYxS9dIx0tk)  
-**Author:** Wryen Meek & Gemini (Antigravity)  
-**Date:** October 30, 2026  
-**Status:** Canonical Engineering Governance Standard  
+**Location:** `gemini-spark/Automation_Architecture_Learnings_and_Best_Practices.md`
+**Governing Directory:** [`gemini-spark`](https://drive.google.com/drive/folders/1XQyRsEx8gQl8idUv_UhfRMYxS9dIx0tk)
+**Author:** Wryen Meek & Gemini (Antigravity)
+**Date:** October 30, 2026
+**Status:** Canonical Engineering Governance Standard
 
 ---
 

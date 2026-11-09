@@ -1,11 +1,11 @@
 # Google Apps Script: Semantic Knowledge Graph Ingestion Pipeline (`Code.gs`)
 
-**System Location:** Google Drive / `gemini-spark` & [`MCDM_Archive_Knowledge_Graph`](https://drive.google.com/drive/folders/1YECmZ3sMeAttBS2OTR_8WJaa_Bt5mO4b)  
-**Filename:** `Knowledge_Graph_Automation_Code.gs.md`  
-**Live Apps Script Project:** [MCDM Archive Knowledge Graph Ingestion](https://script.google.com/d/1WLRQ7rZnz-LmtKmssiCyjrm8vL2ikG-KdPjTfiSI28TuB6F2XdP21kFZ/edit) (`1WLRQ7rZnz-LmtKmssiCyjrm8vL2ikG-KdPjTfiSI28TuB6F2XdP21kFZ`)  
-**Target Seeds Folder:** [`assets/seeds/`](https://drive.google.com/drive/folders/1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT) (`1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT`)  
-**Effective Date:** November 1, 2026  
-**Runtime:** Google Apps Script (V8 Engine) + Recursive BFS Tree Crawl + 18-Model Dynamic Fleet Discovery + ArcadeDB Multi-Model Engine  
+**System Location:** Google Drive / `gemini-spark` & [`MCDM_Archive_Knowledge_Graph`](https://drive.google.com/drive/folders/1YECmZ3sMeAttBS2OTR_8WJaa_Bt5mO4b)
+**Filename:** `Knowledge_Graph_Automation_Code.gs.md`
+**Live Apps Script Project:** [MCDM Archive Knowledge Graph Ingestion](https://script.google.com/d/1WLRQ7rZnz-LmtKmssiCyjrm8vL2ikG-KdPjTfiSI28TuB6F2XdP21kFZ/edit) (`1WLRQ7rZnz-LmtKmssiCyjrm8vL2ikG-KdPjTfiSI28TuB6F2XdP21kFZ`)
+**Target Seeds Folder:** [`assets/seeds/`](https://drive.google.com/drive/folders/1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT) (`1v9uyJ_rnGGUsuytisYKH6YcM1nF60dkT`)
+**Effective Date:** November 1, 2026
+**Runtime:** Google Apps Script (V8 Engine) + Recursive BFS Tree Crawl + 18-Model Dynamic Fleet Discovery + ArcadeDB Multi-Model Engine
 
 ---
 
@@ -458,7 +458,7 @@ function buildGeminiPayload(file, mimeType, isDoc, isText, isPdf) {
     textContent = file.getBlob().getDataAsString();
   }
 
-  const systemInstruction = 
+  const systemInstruction =
     "You are an expert Knowledge Graph Ontologist for fantasy RPG campaign archives, technical documentation, and lore. " +
     "Extract all named entities (Character, Location, Faction, Session, Item, Event) and relationships " +
     "(LOCATED_IN, ALLIED_WITH, HOSTILE_TO, FEATURED_IN, MEMBER_OF, PARTICIPATED_IN). " +

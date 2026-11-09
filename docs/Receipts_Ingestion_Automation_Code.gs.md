@@ -1,11 +1,11 @@
 # Receipts Ingestion Automation Code (Google Apps Script)
 
-**System Location:** Google Drive / `gemini-spark`  
-**Filename:** `Receipts_Ingestion_Automation_Code.gs.md`  
-**Live Apps Script Project:** [Financial-Receipts-Ingestion](https://script.google.com/d/1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ/edit) (`1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ`)  
-**Bound Spreadsheet:** [2026 Tax Receipts Inventory](https://docs.google.com/spreadsheets/d/194nQzKDYo0Bt8tfO1P1UBAD-dtDgSb7CWDatv61-ADI/edit) (`194nQzKDYo0Bt8tfO1P1UBAD-dtDgSb7CWDatv61-ADI`)  
-**Author:** Gemini Spark & Wryen Meek  
-**Effective Date:** October 30, 2026  
+**System Location:** Google Drive / `gemini-spark`
+**Filename:** `Receipts_Ingestion_Automation_Code.gs.md`
+**Live Apps Script Project:** [Financial-Receipts-Ingestion](https://script.google.com/d/1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ/edit) (`1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ`)
+**Bound Spreadsheet:** [2026 Tax Receipts Inventory](https://docs.google.com/spreadsheets/d/194nQzKDYo0Bt8tfO1P1UBAD-dtDgSb7CWDatv61-ADI/edit) (`194nQzKDYo0Bt8tfO1P1UBAD-dtDgSb7CWDatv61-ADI`)
+**Author:** Gemini Spark & Wryen Meek
+**Effective Date:** October 30, 2026
 **Runtime:** Google Apps Script (V8 Engine)
 
 ---

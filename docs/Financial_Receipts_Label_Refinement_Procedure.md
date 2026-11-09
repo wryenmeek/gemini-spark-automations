@@ -1,11 +1,11 @@
 # Financial Receipts Label Refinement Procedure
 
-**System Location:** Google Drive / [gemini-spark](https://drive.google.com/drive/folders/1XQyRsEx8gQl8idUv_UhfRMYxS9dIx0tk)  
-**Companion Apps Script Spec:** [Receipts_Ingestion_Automation_Code.gs.md](https://docs.google.com/document/d/1ezcHQvkzr4sM-uLSWiQToKgvWaozWohLrstsAe6UA7g/edit)  
-**Live Apps Script Project:** [Financial-Receipts-Ingestion](https://script.google.com/d/1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ/edit) (`1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ`)  
-**Master Inventory Sheets:** [2025 Tax Receipts Inventory](https://docs.google.com/spreadsheets/d/1BzwXcQpvlSJ1ccdmfOQ8COZ2EIBSDOQ0UP7he73Yj-Q/edit) | [2026 Tax Receipts Inventory](https://docs.google.com/spreadsheets/d/194nQzKDYo0Bt8tfO1P1UBAD-dtDgSb7CWDatv61-ADI/edit)  
-**Author / Context:** Gemini Spark & Wryen Meek  
-**Effective Date:** October 30, 2026  
+**System Location:** Google Drive / [gemini-spark](https://drive.google.com/drive/folders/1XQyRsEx8gQl8idUv_UhfRMYxS9dIx0tk)
+**Companion Apps Script Spec:** [Receipts_Ingestion_Automation_Code.gs.md](https://docs.google.com/document/d/1ezcHQvkzr4sM-uLSWiQToKgvWaozWohLrstsAe6UA7g/edit)
+**Live Apps Script Project:** [Financial-Receipts-Ingestion](https://script.google.com/d/1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ/edit) (`1PzJn5MJCCE4K0UhZHqS9rboJUpjR7P5psLi1DjQxPpHmKKPAIuxQdkfJ`)
+**Master Inventory Sheets:** [2025 Tax Receipts Inventory](https://docs.google.com/spreadsheets/d/1BzwXcQpvlSJ1ccdmfOQ8COZ2EIBSDOQ0UP7he73Yj-Q/edit) | [2026 Tax Receipts Inventory](https://docs.google.com/spreadsheets/d/194nQzKDYo0Bt8tfO1P1UBAD-dtDgSb7CWDatv61-ADI/edit)
+**Author / Context:** Gemini Spark & Wryen Meek
+**Effective Date:** October 30, 2026
 **Governing Label:** `financial receipts` (Internal Gmail ID: `Label_106`)
 
 ---
@@ -58,7 +58,7 @@ All deterministic Gmail filters created under this procedure must adhere to four
 Execute this 7-step workflow whenever auditing past periods, onboarding new vendor categories, or resolving classification errors:
 
 ### Step 1: Surveillance Query Execution
-Execute a targeted Gmail thread search for the target date range excluding existing tagged messages:  
+Execute a targeted Gmail thread search for the target date range excluding existing tagged messages:
 `after:YYYY/MM/DD before:YYYY/MM/DD -label:"financial receipts" (order OR receipt OR invoice OR payment OR confirmation)`
 
 ### Step 2: Message Inspection & Evidence Extraction

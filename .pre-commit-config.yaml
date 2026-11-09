@@ -1,0 +1,54 @@
+# .pre-commit-config.yaml — Multi-language pre-commit enforcement for gemini-spark-automations
+default_install_hook_types: [pre-commit]
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(\.pytest_cache/|\.ruff_cache/|node_modules/|bun\.lock)
+      - id: end-of-file-fixer
+        exclude: ^(\.pytest_cache/|\.ruff_cache/|node_modules/|bun\.lock)
+      - id: check-yaml
+        exclude: ^(\.pytest_cache/|\.ruff_cache/|node_modules/)
+      - id: check-json
+        exclude: ^(tsconfig\.json|\.pytest_cache/|\.ruff_cache/|node_modules/)
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=15360"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(scripts|tests)/.*\.py$
+      - id: ruff-format
+        files: ^(scripts|tests)/.*\.py$
+
+  - repo: local
+    hooks:
+      - id: ts-typecheck
+        name: TypeScript Static Typecheck
+        entry: bun run typecheck
+        language: system
+        pass_filenames: false
+        files: \.(ts|js)$
+        stages: [pre-commit]
+
+      - id: bun-test
+        name: Apps Script & SparkCore Unit Tests (Bun)
+        entry: bun test
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: python-pytest
+        name: Python Unit Tests (Pytest)
+        entry: python3 -m pytest -v tests/python
+        language: system
+        pass_filenames: false
+        files: ^(scripts|tests)/.*\.py$
+        stages: [pre-commit]

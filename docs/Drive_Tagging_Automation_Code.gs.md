@@ -1,10 +1,10 @@
 # Google Apps Script: Drive Tagging Automation (`Code.gs`)
 
-**System Location:** Google Drive / `gemini-spark`  
-**Filename:** `Drive_Tagging_Automation_Code.gs.md`  
-**Live Apps Script Project:** [Drive-Tagging-Automation](https://script.google.com/d/1F2-pZJZ1jzfoNS7EgnQOYXOwii5YEU7rFOMKOWN52k2GQcWrBpPbp2-w/edit) (`1F2-pZJZ1jzfoNS7EgnQOYXOwii5YEU7rFOMKOWN52k2GQcWrBpPbp2-w`)  
-**Target Spreadsheet:** [Drive Tagging Master Index](https://docs.google.com/spreadsheets/d/1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA/edit) (`1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA`)  
-**Effective Date:** October 30, 2026  
+**System Location:** Google Drive / `gemini-spark`
+**Filename:** `Drive_Tagging_Automation_Code.gs.md`
+**Live Apps Script Project:** [Drive-Tagging-Automation](https://script.google.com/d/1F2-pZJZ1jzfoNS7EgnQOYXOwii5YEU7rFOMKOWN52k2GQcWrBpPbp2-w/edit) (`1F2-pZJZ1jzfoNS7EgnQOYXOwii5YEU7rFOMKOWN52k2GQcWrBpPbp2-w`)
+**Target Spreadsheet:** [Drive Tagging Master Index](https://docs.google.com/spreadsheets/d/1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA/edit) (`1XE78-Gae0a5DfkuC0lJcy62XjreqPIPovy8LuoAT3gA`)
+**Effective Date:** October 30, 2026
 **Runtime:** Google Apps Script (V8 Engine) + `gemini-2.5-flash`
 
 ---

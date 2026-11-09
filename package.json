@@ -7,7 +7,8 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "deploy": "./deploy.sh"
+    "deploy": "./deploy.sh",
+    "pre-commit": "pre-commit run --all-files"
   },
   "devDependencies": {
     "@google/clasp": "^3.4.1",

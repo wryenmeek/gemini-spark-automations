@@ -424,7 +424,7 @@ function buildGeminiPayload(file, mimeType, isDoc, isText, isPdf) {
     textContent = file.getBlob().getDataAsString();
   }
 
-  const systemInstruction = 
+  const systemInstruction =
     "You are an expert Knowledge Graph Ontologist for fantasy RPG campaign archives, technical documentation, and lore. " +
     "Extract all named entities (Character, Location, Faction, Session, Item, Event) and relationships " +
     "(LOCATED_IN, ALLIED_WITH, HOSTILE_TO, FEATURED_IN, MEMBER_OF, PARTICIPATED_IN). " +

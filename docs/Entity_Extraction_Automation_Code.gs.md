@@ -98,7 +98,7 @@ const GEMINI_CONFIG = {
 function extractDocumentSchema(documentId, options = {}) {
   const maxIterations = options.maxIterations || GEMINI_CONFIG.DEFAULT_MAX_ITERATIONS;
   const initialSchema = options.initialSchema || null;
-  const skillInstructions = options.skillInstructions || 
+  const skillInstructions = options.skillInstructions ||
     'Extract all entities, technical specifications, statistics, rules, and semantic relationships systematically.';
 
 
@@ -337,7 +337,7 @@ function refineCampaignSchema(skillInstructions, presentationDocument, initialSc
 
     // Step C: Update schema with discovered structural gaps
     const updatedSchema = updateSchemaWithGaps(currentSchema, unmappedElements);
-    
+
     // Halt iteration if the schema topology stabilized
     if (JSON.stringify(updatedSchema) === JSON.stringify(currentSchema)) {
       break;
@@ -459,7 +459,7 @@ Return a JSON array containing gap descriptors:
  */
 function updateSchemaWithGaps(schema, gaps) {
   const updated = JSON.parse(JSON.stringify(schema));
-  
+
   if (!updated.properties) {
     updated.properties = {};
   }
