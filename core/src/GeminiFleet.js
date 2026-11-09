@@ -99,7 +99,7 @@ var GeminiFleet = (function() {
 
     const hoursLeft = (secondsLeft / 3600).toFixed(1);
     if (typeof Logger !== "undefined") {
-      Logger.log('[DAILY_LIMIT_EXCEEDED] Model "' + model + '" hit daily quota. Banned until UTC midnight (~' + hoursLeft + 'h remaining).');
+      Logger.log('[DAILY_LIMIT_EXCEEDED] Model "' + model + '" hit daily quota limit. Banned until UTC midnight (~' + hoursLeft + 'h remaining).');
     }
   }
 

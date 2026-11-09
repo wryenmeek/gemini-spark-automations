@@ -343,8 +343,12 @@ function classifyFileWithGemini(file, taxonomyList) {
 /**
  * Checks whether an HTTP 429 response is due to exceeding the daily quota (RPD)
  * vs a transient per-minute rate limit (RPM).
+ * Delegates to SparkCore.GeminiFleet.isDailyQuotaError.
  */
 function isDailyQuotaError(statusCode, responseText) {
+  if (typeof SparkCore !== "undefined" && SparkCore.isDailyQuotaError) {
+    return SparkCore.isDailyQuotaError(statusCode, responseText);
+  }
   if (statusCode !== 429) return false;
   if (!responseText) return false;
   const text = responseText.toLowerCase();
@@ -360,267 +364,73 @@ function isDailyQuotaError(statusCode, responseText) {
 
 /**
  * Calculates remaining seconds until the next UTC midnight (when Google AI Studio daily quotas reset).
+ * Delegates to SparkCore.GeminiFleet.getSecondsUntilUtcMidnight.
  */
 function getSecondsUntilUtcMidnight() {
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.getSecondsUntilUtcMidnight();
+  }
   const now = new Date();
   const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
   return Math.max(60, Math.floor((tomorrow.getTime() - now.getTime()) / 1000));
 }
 
 /**
- * Marks a model as daily-exhausted across CacheService (fast memory) and ScriptProperties (durable).
+ * Marks a model as daily-exhausted across CacheService and ScriptProperties.
+ * Delegates to SparkCore.GeminiFleet.markModelDailyExhausted.
  */
 function markModelDailyExhausted(model) {
-  const secondsLeft = getSecondsUntilUtcMidnight();
-  const resetTimestamp = Date.now() + secondsLeft * 1000;
-
-  try {
-    const cache = CacheService.getScriptCache();
-    if (cache) {
-      cache.put(`DAILY_EXHAUSTED_${model}`, "true", Math.min(21600, secondsLeft));
-    }
-  } catch (e) {
-    Logger.log(`[WARN] Could not update CacheService: ${e.toString()}`);
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.markModelDailyExhausted(model);
   }
-
-  try {
-    const props = PropertiesService.getScriptProperties();
-    if (props) {
-      props.setProperty(`DAILY_EXHAUSTED_${model}`, String(resetTimestamp));
-    }
-  } catch (e) {
-    Logger.log(`[WARN] Could not update ScriptProperties: ${e.toString()}`);
-  }
-
-  const hoursLeft = (secondsLeft / 3600).toFixed(1);
-  Logger.log(`[DAILY_LIMIT_EXCEEDED] Model "${model}" hit daily quota limit. Banned until UTC midnight (~${hoursLeft}h remaining).`);
 }
 
 /**
  * Checks if a model is currently flagged as having exceeded its daily quota limit.
+ * Delegates to SparkCore.GeminiFleet.isModelDailyExhausted.
  */
 function isModelDailyExhausted(model) {
-  try {
-    const cache = CacheService.getScriptCache();
-    if (cache && cache.get(`DAILY_EXHAUSTED_${model}`) === "true") {
-      return true;
-    }
-
-    const props = PropertiesService.getScriptProperties();
-    if (props) {
-      const resetTimeStr = props.getProperty(`DAILY_EXHAUSTED_${model}`);
-      if (resetTimeStr) {
-        const resetTime = parseInt(resetTimeStr, 10);
-        if (Date.now() < resetTime) {
-          return true;
-        } else {
-          props.deleteProperty(`DAILY_EXHAUSTED_${model}`);
-          return false;
-        }
-      }
-    }
-  } catch (e) {
-    Logger.log(`[WARN] Error checking model exhaustion status for "${model}": ${e.toString()}`);
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.isModelDailyExhausted(model);
   }
   return false;
 }
 
 /**
- * Dynamically queries the Gemini API to discover all available models supporting generateContent,
- * filtering and prioritizing fast multimodal models (Flash tier -> Lite -> Pro).
- * Results are cached in ScriptCache for up to 6 hours.
+ * Dynamically queries the Gemini API to discover all available models supporting generateContent.
+ * Delegates to SparkCore.discoverAvailableModels.
  */
 function discoverAvailableModels(apiKey) {
-  const cacheKey = "DISCOVERED_GEMINI_MODELS";
-  try {
-    const cache = CacheService.getScriptCache();
-    if (cache) {
-      const cached = cache.get(cacheKey);
-      if (cached) {
-        return JSON.parse(cached);
-      }
-    }
-  } catch (e) {
-    Logger.log(`[WARN] CacheService lookup failed: ${e.toString()}`);
+  if (typeof SparkCore !== "undefined" && SparkCore.discoverAvailableModels) {
+    return SparkCore.discoverAvailableModels(apiKey);
   }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-  try {
-    const response = UrlFetchApp.fetch(url, { method: "get", muteHttpExceptions: true });
-    if (response.getResponseCode() === 200) {
-      const json = JSON.parse(response.getContentText());
-      const rawModels = json.models || [];
-
-      // Priority scoring dictionary
-      const priorityMap = {
-        "gemini-2.5-flash": 10,
-        "gemini-2.5-flash-lite": 15,
-        "gemini-flash-latest": 20,
-        "gemini-flash-lite-latest": 25,
-        "gemini-3.5-flash": 30,
-        "gemini-3.5-flash-lite": 35,
-        "gemini-3.1-flash-lite": 40,
-        "gemini-3.1-flash-lite-preview": 45,
-        "gemini-3-flash-preview": 50,
-        "gemini-3.6-flash": 55,
-        "gemini-3.7-flash": 60,
-        "gemini-3.8-flash": 65,
-        "gemini-omni-flash-preview": 70,
-        "gemini-omni-1.1-flash": 75,
-        "gemini-2.5-pro": 100,
-        "gemini-pro-latest": 105,
-        "gemini-3.1-pro-preview": 110,
-        "gemini-3.1-pro-preview-customtools": 115,
-        "gemini-4-argon": 120
-      };
-
-      const excludedKeywords = [
-        "tts", "image", "lyria", "transcribe", "robotics",
-        "computer-use", "deep-research", "banana", "embed", "aqa"
-      ];
-
-      const discovered = rawModels
-        .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
-        .map(m => m.name.replace(/^models\//, ""))
-        .filter(name => {
-          const lower = name.toLowerCase();
-          return !excludedKeywords.some(keyword => lower.includes(keyword));
-        })
-        .sort((a, b) => {
-          const rankA = priorityMap[a] || 200;
-          const rankB = priorityMap[b] || 200;
-          return rankA - rankB;
-        });
-
-      if (discovered.length > 0) {
-        try {
-          const cache = CacheService.getScriptCache();
-          if (cache) {
-            cache.put(cacheKey, JSON.stringify(discovered), 21600); // 6 hours
-          }
-        } catch (e) {}
-        Logger.log(`[MODEL_DISCOVERY] Discovered ${discovered.length} available Gemini models: [${discovered.join(", ")}]`);
-        return discovered;
-      }
-    }
-  } catch (e) {
-    Logger.log(`[WARN] Dynamic model discovery failed (${e.toString()}). Falling back to static ladder.`);
-  }
-
   return CONFIG.MODEL_LADDER;
 }
 
 /**
- * Assembles the active dynamic model ladder:
- * 1. Discovers candidate models from API (or uses explicit custom ladder if configured).
- * 2. Filters out any models that have hit their daily limit.
+ * Assembles the active dynamic model ladder.
+ * Delegates to SparkCore.GeminiFleet.getDynamicModelLadder.
  */
 function getDynamicModelLadder(apiKey, configLadder) {
-  let candidates = [];
-  if (typeof configLadder === 'string') {
-    configLadder = [configLadder];
+  if (typeof SparkCore !== "undefined" && SparkCore.GeminiFleet) {
+    return SparkCore.GeminiFleet.getDynamicModelLadder(apiKey, configLadder);
   }
-
-  if (Array.isArray(configLadder) && configLadder.length > 0 && configLadder !== CONFIG.MODEL_LADDER) {
-    candidates = configLadder;
-  } else {
-    candidates = discoverAvailableModels(apiKey);
-  }
-
-  const activeLadder = candidates.filter(m => !isModelDailyExhausted(m));
-
-  if (activeLadder.length > 0) {
-    return activeLadder;
-  }
-
-  Logger.log(`[WARN] All models in candidate list have hit daily quota limits! Attempting primary model as last resort.`);
-  return candidates.slice(0, 1);
+  return [];
 }
 
 /**
  * Invokes the Gemini API via UrlFetchApp with Dynamic Model Discovery, Daily Limit Tracking,
  * and Exponential Backoff.
+ * Delegates to SparkCore.callGeminiAPI.
  */
 function callGeminiAPI(payload, apiKey, modelOrLadder) {
-  const ladder = getDynamicModelLadder(apiKey, modelOrLadder);
-  Logger.log(`[MODEL_LADDER_ACTIVE] Running with active ladder (${ladder.length} models): [${ladder.join(" -> ")}]`);
-
-  for (let i = 0; i < ladder.length; i++) {
-    const model = ladder[i];
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    const options = {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    };
-
-    try {
-      let response = UrlFetchApp.fetch(url, options);
-      let code = response.getResponseCode();
-      let responseText = response.getContentText();
-
-      // Check for Daily Limit Quota Exhaustion (RPD)
-      if (isDailyQuotaError(code, responseText)) {
-        markModelDailyExhausted(model);
-        const nextModel = ladder[i + 1];
-        if (nextModel) {
-          Logger.log(`[MODEL_LADDER_ROTATE] Daily quota exceeded for "${model}". Falling back immediately to "${nextModel}"...`);
-          continue;
-        } else {
-          Logger.log(`[MODEL_LADDER_EXHAUSTED] All models in dynamic ladder (${ladder.join(" -> ")}) have exhausted their quotas.`);
-          return null;
-        }
-      }
-
-      // Check for Transient Rate Limits (RPM / 503)
-      if (code === 429 || code === 503) {
-        Logger.log(`[QUOTA_TRANSIENT] Model "${model}" temporarily throttled (HTTP ${code}). Pausing 1.5s for recovery...`);
-        Utilities.sleep(1500);
-        response = UrlFetchApp.fetch(url, options);
-        code = response.getResponseCode();
-        responseText = response.getContentText();
-
-        if (isDailyQuotaError(code, responseText)) {
-          markModelDailyExhausted(model);
-        }
-      }
-
-      // Persistent error on current model: Rotate to next candidate
-      if (code === 429 || code === 503) {
-        const nextModel = ladder[i + 1];
-        if (nextModel) {
-          Logger.log(`[MODEL_LADDER_ROTATE] Model "${model}" quota exhausted (HTTP ${code}). Rotating down to "${nextModel}"...`);
-          continue;
-        } else {
-          Logger.log(`[MODEL_LADDER_EXHAUSTED] All models in ladder (${ladder.join(" -> ")}) exhausted.`);
-          return null;
-        }
-      }
-
-      if (code !== 200) {
-        Logger.log(`[ERROR] Model "${model}" returned HTTP ${code}: ${responseText}`);
-        continue;
-      }
-
-      const json = JSON.parse(responseText);
-      const candidateText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!candidateText) {
-        Logger.log(`[WARN] Model "${model}" returned no candidate parts.`);
-        continue;
-      }
-
-      Logger.log(`[SUCCESS] Extracted tags using model: "${model}"`);
-      const parsedData = JSON.parse(candidateText);
-      if (parsedData && typeof parsedData === "object") {
-        parsedData._modelUsed = model;
-      }
-      return parsedData;
-    } catch (e) {
-      Logger.log(`[ERROR] Exception calling model "${model}": ${e.toString()}`);
+  if (typeof SparkCore !== "undefined" && SparkCore.callGeminiAPI) {
+    const res = SparkCore.callGeminiAPI(payload, apiKey, modelOrLadder);
+    if (res && res._modelUsed) {
+      Logger.log('[SUCCESS] Extracted tags using model: "' + res._modelUsed + '"');
     }
+    return res;
   }
-
   return null;
 }
 
@@ -647,9 +457,13 @@ INSTRUCTIONS:
 }
 
 /**
- * HELPER: Extract text snippet from Google Doc or plain text/markdown file
+ * HELPER: Extract text snippet from Google Doc or plain text/markdown file.
+ * Delegates to SparkCore.DriveUtils.extractFileTextSnippet.
  */
 function extractFileTextSnippet(file, wordLimit) {
+  if (typeof SparkCore !== "undefined" && SparkCore.extractFileTextSnippet) {
+    return SparkCore.extractFileTextSnippet(file, wordLimit);
+  }
   try {
     let text = '';
     const mime = file.getMimeType();
@@ -681,9 +495,13 @@ function getCanonicalTaxonomy(sheet) {
 }
 
 /**
- * HELPER: Read all File IDs already present in Review_Queue so they are never queued twice
+ * HELPER: Read all File IDs already present in Review_Queue so they are never queued twice.
+ * Delegates to SparkCore.SheetKit.getQueuedFileIds.
  */
 function getQueuedFileIds(queueSheet) {
+  if (typeof SparkCore !== "undefined" && SparkCore.getQueuedFileIds) {
+    return SparkCore.getQueuedFileIds(queueSheet, 3);
+  }
   const ids = new Set();
   if (!queueSheet || queueSheet.getLastRow() < 2) return ids;
   const values = queueSheet.getRange(2, 3, queueSheet.getLastRow() - 1, 1).getValues();

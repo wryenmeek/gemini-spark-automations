@@ -7,6 +7,14 @@
         "serviceId": "tasks",
         "version": "v1"
       }
+    ],
+    "libraries": [
+      {
+        "userSymbol": "SparkCore",
+        "libraryId": "1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh",
+        "version": "1",
+        "developmentMode": true
+      }
     ]
   },
   "exceptionLogging": "STACKDRIVER",

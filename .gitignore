@@ -27,6 +27,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .cache
 *.tsbuildinfo
 
+# Tool & Workspace Caches
+.claude/
+.infigraph/
+
 # IntelliJ based IDEs
 .idea
 
@@ -50,4 +54,5 @@ env/
 venv/
 ENV/
 .venv/
+spark-wheels/*.whl
 spark-wheels/wheels/*.whl

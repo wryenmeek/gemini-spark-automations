@@ -170,8 +170,8 @@ var DriveUtils = (function() {
         }
       } else if (mime === "application/pdf") {
         // Warning: Avoid getBlob().getDataAsString() on PDFs as it dumps unparsed binary streams.
-        // Signal that multimodal inlineData or separate OCR is required.
-        text = "[PDF document: " + file.getName() + " (size: " + file.getSize() + " bytes). Multimodal inlineData processing required.]";
+        // Fall back cleanly to the file's name.
+        text = typeof file.getName === "function" ? file.getName() : "PDF Document";
       } else if (
         mime.includes("text") ||
         mime === "application/json" ||
@@ -180,13 +180,14 @@ var DriveUtils = (function() {
       ) {
         text = file.getBlob().getDataAsString();
       } else {
-        text = "[Non-text file: " + file.getName() + " (" + mime + ")]";
+        text = typeof file.getName === "function" ? file.getName() : "[Non-text file: (" + mime + ")]";
       }
     } catch (e) {
+      const fileId = typeof file.getId === "function" ? file.getId() : (typeof file.getName === "function" ? file.getName() : "unknown");
       if (typeof Logger !== "undefined") {
-        Logger.log('[WARN] Text extraction failed for file "' + file.getId() + '": ' + e.toString());
+        Logger.log('[WARN] Text extraction failed for file "' + fileId + '": ' + e.toString());
       }
-      text = "[Text extraction failed: " + e.toString() + "]";
+      text = typeof file.getName === "function" ? file.getName() : "[Text extraction failed: " + e.toString() + "]";
     }
 
     // Heap-safe word splitting: pre-slice sample window to avoid V8 heap OOM on large docs

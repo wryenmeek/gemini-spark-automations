@@ -4,16 +4,58 @@ import * as path from "path";
 import * as vm from "vm";
 
 const projectsDir = path.join(import.meta.dir, "..", "projects");
+const coreDir = path.join(import.meta.dir, "..", "core", "src");
+const coreFiles = [
+  "GeminiFleet.js",
+  "DriveMetadata.js",
+  "DriveUtils.js",
+  "SheetKit.js",
+  "Harness.js",
+  "SparkCore.js",
+];
+
+const coreCodeMap: Record<string, string> = {};
+for (const file of coreFiles) {
+  coreCodeMap[file] = fs.readFileSync(path.join(coreDir, file), "utf-8");
+}
 
 function loadGasContext(projectFolder: string, mocks: Record<string, any> = {}) {
   const codePath = path.join(projectsDir, projectFolder, "Code.gs");
   const code = fs.readFileSync(codePath, "utf-8");
   const logs: string[] = [];
+  const scriptCacheStore: Record<string, string> = {};
+  const scriptPropsStore: Record<string, string> = {};
+
   const context: Record<string, any> = {
     Logger: { log: (msg: string) => logs.push(msg) },
     Utilities: {
-      formatDate: (_d: Date, _tz: string, _fmt: string) => "2026-10-30",
+      formatDate: (_d: Date, _tz: string, fmt: string) =>
+        fmt === "yyyy-MM-dd" ? "2026-10-30" : "2026-10-30",
       base64Encode: (b: number[]) => Buffer.from(b).toString("base64"),
+      sleep: (_ms: number) => {},
+    },
+    CacheService: {
+      getScriptCache: () => ({
+        get: (k: string) => scriptCacheStore[k] || null,
+        put: (k: string, v: string) => {
+          scriptCacheStore[k] = v;
+        },
+        remove: (k: string) => {
+          delete scriptCacheStore[k];
+        },
+      }),
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (k: string) => scriptPropsStore[k] || null,
+        setProperty: (k: string, v: string) => {
+          scriptPropsStore[k] = v;
+        },
+        deleteProperty: (k: string) => {
+          delete scriptPropsStore[k];
+        },
+        getProperties: () => ({ ...scriptPropsStore }),
+      }),
     },
     Session: {
       getScriptTimeZone: () => "America/New_York",
@@ -22,6 +64,7 @@ function loadGasContext(projectFolder: string, mocks: Record<string, any> = {}) 
     MimeType: {
       GOOGLE_DOCS: "application/vnd.google-apps.document",
       GOOGLE_SLIDES: "application/vnd.google-apps.presentation",
+      PDF: "application/pdf",
     },
     DocumentApp: {
       ParagraphHeading: { HEADING2: "HEADING2" },
@@ -44,6 +87,9 @@ function loadGasContext(projectFolder: string, mocks: Record<string, any> = {}) 
     ...mocks,
   };
   vm.createContext(context);
+  for (const file of coreFiles) {
+    vm.runInContext(coreCodeMap[file]!, context);
+  }
   vm.runInContext(code, context);
   return { context, logs };
 }
@@ -1065,7 +1111,7 @@ describe("4. Semantic Knowledge Graph Ingestion (Code.gs)", () => {
     const { context } = loadGasContext("knowledge-graph-ingestion", {
       UrlFetchApp: {
         fetch: (url: string) => {
-          if (url.includes("/v1beta/models?key=")) {
+          if (url.includes("/v1beta/models")) {
             return {
               getResponseCode: () => 200,
               getContentText: () => JSON.stringify(mockModelsResponse),

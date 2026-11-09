@@ -141,6 +141,29 @@ To support documents exceeding Google Apps Script limits (such as 100MB+ ruleboo
 - Standalone libraries and pipelines must request only required functional scopes (`drive`, `documents`, `spreadsheets`, `script.external_request`, `script.send_mail`).
 - Overprivileged scopes (such as `userinfo.email` and `script.storage`) are pruned unless explicitly required by user identity flows.
 
+### 5.3 SparkCore Standalone Script & Library Linking
+- **Standalone Script ID:** `1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh`
+- **Current Version:** `1` (`SparkCore v1.0.0`)
+- **Editor URL:** [https://script.google.com/d/1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh/edit](https://script.google.com/d/1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh/edit)
+- **Pipeline Wiring:** All container-bound pipelines (`projects/receipts-ingestion`, `projects/writing-style-index`, `projects/drive-tagging`, `projects/knowledge-graph-ingestion`) declare `SparkCore` as an external library dependency in `appsscript.json`:
+  ```json
+  "dependencies": {
+    "libraries": [
+      {
+        "userSymbol": "SparkCore",
+        "libraryId": "1ivaQzWjBEYWT0bfohNiZR9acwhrIGJSF9TXSsDmM_wvxeqN2f3RgmWVh",
+        "version": "1",
+        "developmentMode": true
+      }
+    ]
+  }
+  ```
+
+### 5.4 Offline Python Wheel Depot (`spark-wheels/`)
+- **Dependency Manifest:** Pinned `spark-wheels/requirements.txt` containing `pymupdf>=1.24.0`, `google-api-python-client>=2.100.0`, `google-auth>=2.20.0`, `requests>=2.31.0`.
+- **Airgapped Staging:** Staged locally via `pip download -r requirements.txt -d .` and installed in network-isolated sandboxes via `pip install --no-index --find-links . -r requirements.txt`.
+- **Automated CI Validation:** Verified on every PR and main branch push via `pip install --dry-run -r spark-wheels/requirements.txt`.
+
 ---
 
 ## 6. Verification & Quality Assurance Architecture
